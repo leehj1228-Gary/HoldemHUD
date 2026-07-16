@@ -2,7 +2,15 @@
 // 순수 모듈: React·storage import 금지 (engine/만 의존) — 단위 테스트 가능.
 // 모든 액션은 불변 업데이트. no-op이면 반드시 기존 state 참조를 그대로 반환한다.
 
-import { SCHEMA_VERSION, SCREENS, createSeat, createHand, newId, isValidHandRecord } from '../engine/schema.js';
+import {
+    SCHEMA_VERSION,
+    SCREENS,
+    createSeat,
+    createHand,
+    newId,
+    isValidHandRecord,
+    normalizeDetailedHandRecord,
+} from '../engine/schema.js';
 import {
     positionsForHand,
     deriveHandState,
@@ -10,6 +18,14 @@ import {
     forceFold,
     nextDealerSeat,
 } from '../engine/handEngine.js';
+import {
+    enableDetailedTracking,
+    applyDetailedAction,
+    advanceDetailedStreet,
+    setDetailedCards,
+    completeDetailedHand,
+    undoDetailedStep,
+} from '../engine/detailedHandEngine.js';
 
 export const DEFAULT_BLINDS = { sb: 1, bb: 2 };
 export const DEFAULT_SETTINGS = {
@@ -110,7 +126,17 @@ function withRegeneratedHand(session) {
 
 /** 진행 중 핸드(액션 1개 이상) 여부 — 구성 변경 액션의 가드 */
 function isMidHand(session) {
-    return !!(session.currentHand && session.currentHand.actions.length > 0);
+    return !!(session.currentHand
+        && (session.currentHand.actions.length > 0 || session.currentHand.detailed?.enabled));
+}
+
+function isCompletedSample(hand) {
+    return !!hand && (!hand.detailed?.enabled || hand.detailed.completed === true);
+}
+
+function normalizeLoadedHand(hand) {
+    if (hand?.detailed?.enabled) return normalizeDetailedHandRecord(hand);
+    return isValidHandRecord(hand) ? hand : null;
 }
 
 /**
@@ -120,7 +146,9 @@ function isMidHand(session) {
  */
 function advanceHand(session, endedAt) {
     const cur = session.currentHand;
-    if (!cur || cur.actions.length === 0) {
+    if (cur?.detailed?.enabled && !cur.detailed.completed) return session;
+    const shouldPersist = !!cur && (cur.actions.length > 0 || cur.detailed?.completed);
+    if (!shouldPersist) {
         const next = clampStraddle({
             ...session,
             dealerSeat: nextDealerSeat(session.seats, session.dealerSeat),
@@ -151,11 +179,14 @@ export function reducer(state, action) {
             // 방어: 손상된 저장 데이터가 파생 계산(deriveHandState 등)에서 throw하지 않도록 검증
             if (session && Array.isArray(session.seats)) {
                 const hands = Array.isArray(session.hands)
-                    ? session.hands.filter(isValidHandRecord)
+                    ? session.hands.map(normalizeLoadedHand).filter(Boolean)
                     : [];
                 session = { ...session, hands };
-                if (!isValidHandRecord(session.currentHand)) {
+                const currentHand = normalizeLoadedHand(session.currentHand);
+                if (!currentHand) {
                     session = withRegeneratedHand({ ...session, currentHand: null });
+                } else {
+                    session = { ...session, currentHand };
                 }
             } else if (session) {
                 session = null; // 좌석 배열조차 없는 세션은 복원 불가
@@ -163,7 +194,7 @@ export function reducer(state, action) {
             const archive = Array.isArray(payload.archive)
                 ? payload.archive.map(rec =>
                     rec && typeof rec === 'object' && Array.isArray(rec.hands)
-                        ? { ...rec, hands: rec.hands.filter(isValidHandRecord) }
+                        ? { ...rec, hands: rec.hands.map(normalizeLoadedHand).filter(Boolean) }
                         : rec)
                 : state.archive;
             return {
@@ -172,7 +203,7 @@ export function reducer(state, action) {
                 roster: loaded && Array.isArray(loaded.roster) ? loaded.roster : state.roster,
                 settings: normalizeSettings(loaded && loaded.settings),
                 archive,
-                autoNext: { pending: false },
+                autoNext: { pending: !!session?.currentHand?.detailed?.completed },
             };
         }
 
@@ -206,8 +237,19 @@ export function reducer(state, action) {
             if (!state.session) return state; // 두 번째 END_SESSION은 no-op (이중 집계 차단)
             const s = state.session;
             const endedAt = action.endedAt !== undefined ? action.endedAt : Date.now();
-            const hands = s.currentHand && s.currentHand.actions.length > 0
-                ? [...s.hands, { ...s.currentHand, endedAt }]
+            const hasCurrentRecord = s.currentHand
+                && (s.currentHand.actions.length > 0 || s.currentHand.detailed?.enabled);
+            const finishedCurrent = hasCurrentRecord
+                ? {
+                    ...s.currentHand,
+                    endedAt,
+                    status: s.currentHand.detailed?.enabled && !s.currentHand.detailed.completed
+                        ? 'incomplete'
+                        : (s.currentHand.status || 'complete'),
+                }
+                : null;
+            const hands = finishedCurrent
+                ? [...s.hands, finishedCurrent]
                 : s.hands;
             const record = {
                 id: s.id,
@@ -216,7 +258,8 @@ export function reducer(state, action) {
                 endedAt,
                 blinds: s.blinds,
                 currency: s.currency,
-                totalHands: hands.length,
+                totalHands: hands.filter(isCompletedSample).length,
+                incompleteHands: hands.filter(hand => !isCompletedSample(hand)).length,
                 hands,
             };
             return {
@@ -242,10 +285,103 @@ export function reducer(state, action) {
             };
         }
 
+        case 'ENABLE_DETAILED_TRACKING': {
+            if (!state.session || !state.session.currentHand) return state;
+            const cur = state.session.currentHand;
+            const enabled = enableDetailedTracking(cur, action.options || {});
+            if (enabled === cur) {
+                return state.autoNext.pending ? { ...state, autoNext: { pending: false } } : state;
+            }
+            const currentHand = {
+                ...enabled,
+                schemaVersion: 2,
+                status: 'in_progress',
+                captureLevel: 'detailed',
+                currency: state.session.currency,
+            };
+            return {
+                ...state,
+                session: { ...state.session, currentHand },
+                autoNext: { pending: false },
+            };
+        }
+
+        case 'DISABLE_DETAILED_TRACKING': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const hasPostflopActions = cur.actions.some(a => a.street && a.street !== 'preflop');
+            const hasBoard = Object.values(cur.detailed.board || {}).some(cards => Array.isArray(cards) && cards.length > 0);
+            if (hasPostflopActions || hasBoard || cur.detailed.street !== 'preflop') return state;
+            const quickHand = { ...cur };
+            delete quickHand.detailed;
+            delete quickHand.schemaVersion;
+            delete quickHand.status;
+            delete quickHand.captureLevel;
+            return {
+                ...state,
+                session: { ...state.session, currentHand: quickHand },
+                autoNext: { pending: deriveHandState(quickHand).isOver },
+            };
+        }
+
+        case 'RECORD_DETAILED_ACTION': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const next = applyDetailedAction(cur, action.seat, action.actionType, action.options || {});
+            if (next === cur) return state;
+            return {
+                ...state,
+                session: { ...state.session, currentHand: next },
+                autoNext: { pending: false },
+            };
+        }
+
+        case 'ADVANCE_DETAILED_STREET': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const next = advanceDetailedStreet(cur, action.cards || []);
+            if (next === cur) return state;
+            return {
+                ...state,
+                session: { ...state.session, currentHand: next },
+                autoNext: { pending: false },
+            };
+        }
+
+        case 'SET_DETAILED_CARDS': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const next = setDetailedCards(cur, action.payload || {});
+            if (next === cur) return state;
+            return { ...state, session: { ...state.session, currentHand: next } };
+        }
+
+        case 'COMPLETE_DETAILED_HAND': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const next = completeDetailedHand(cur, action.payload || {});
+            if (next === cur) return state;
+            const currentHand = { ...next, status: 'complete' };
+            return {
+                ...state,
+                session: { ...state.session, currentHand },
+                autoNext: { pending: true },
+            };
+        }
+
         case 'UNDO': {
             if (!state.session) return state;
             const s = state.session;
             const cur = s.currentHand;
+            if (cur?.detailed?.enabled) {
+                const previous = undoDetailedStep(cur);
+                if (previous === cur) return state;
+                return {
+                    ...state,
+                    session: { ...s, currentHand: previous },
+                    autoNext: { pending: false },
+                };
+            }
             if (cur && cur.actions.length > 0) {
                 // 현재 핸드에서 마지막 액션 제거
                 const trimmed = { ...cur, actions: cur.actions.slice(0, -1) };
@@ -255,7 +391,10 @@ export function reducer(state, action) {
                 // 핸드 경계 넘기: 마지막 완료 핸드 pop → dealer/straddle/handNo 복원,
                 // 마지막 액션 제거한 상태로 currentHand 복귀
                 const prev = s.hands[s.hands.length - 1];
-                const restored = { ...prev, endedAt: null, actions: prev.actions.slice(0, -1) };
+                const restoredBase = { ...prev, endedAt: null };
+                const restored = prev.detailed?.enabled
+                    ? undoDetailedStep(restoredBase)
+                    : { ...restoredBase, actions: prev.actions.slice(0, -1) };
                 return {
                     ...state,
                     session: {
@@ -275,7 +414,9 @@ export function reducer(state, action) {
 
         case 'NEXT_HAND': {
             if (!state.session) return state;
-            return { ...state, session: advanceHand(state.session, action.endedAt), autoNext: { pending: false } };
+            const session = advanceHand(state.session, action.endedAt);
+            if (session === state.session) return state;
+            return { ...state, session, autoNext: { pending: false } };
         }
 
         case 'AUTO_NEXT_FIRED': {
@@ -291,6 +432,7 @@ export function reducer(state, action) {
         case 'TOGGLE_SITOUT': {
             if (!state.session) return state;
             const s = state.session;
+            if (s.currentHand?.detailed?.enabled) return state;
             const seatRec = s.seats.find(x => x.seat === action.seat);
             if (!seatRec) return state;
 

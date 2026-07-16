@@ -7,6 +7,10 @@ import { SCHEMA_VERSION, newId, isValidActionType, isValidHandRecord, createActi
 export const STATE_KEY = 'hh:v1:state';
 export const ARCHIVE_KEY = 'hh:v1:archive';
 
+// STATE_KEY의 최신 포맷. 상태와 아카이브를 같은 localStorage 값에 넣어
+// setItem 1회로 커밋한다. ARCHIVE_KEY는 구 split 포맷을 읽기 위한 호환 키다.
+export const PERSISTENCE_ENVELOPE_VERSION = 1;
+
 // 구 버전(v33) 키 전체 목록 — resetAllData에서 함께 삭제, 마이그레이션에서 읽기만 함
 export const LEGACY_KEYS = {
     PLAYERS: 'poker_players_v33',
@@ -86,6 +90,42 @@ function safeSetJSON(key, value) {
     }
 }
 
+function isObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isPersistenceEnvelope(value) {
+    return isObject(value)
+        && value.persistenceEnvelopeVersion === PERSISTENCE_ENVELOPE_VERSION
+        && Object.prototype.hasOwnProperty.call(value, 'state')
+        && Object.prototype.hasOwnProperty.call(value, 'archive');
+}
+
+function normalizeStateAtom(value) {
+    if (!isObject(value)) return null;
+    return { schemaVersion: SCHEMA_VERSION, ...value };
+}
+
+// 마이그레이션을 실행하지 않고 현재 v1 저장값만 읽는다. 호환 API가 나머지
+// 절반을 보존한 채 새 envelope를 쓸 때도 사용한다.
+function readV1Snapshot() {
+    const rawState = safeParseJSON(STATE_KEY, null);
+    if (isPersistenceEnvelope(rawState)) {
+        return {
+            state: normalizeStateAtom(rawState.state),
+            archive: Array.isArray(rawState.archive) ? rawState.archive : [],
+            envelope: true,
+        };
+    }
+
+    const rawArchive = safeParseJSON(ARCHIVE_KEY, null);
+    return {
+        state: isObject(rawState) ? rawState : null,
+        archive: Array.isArray(rawArchive) ? rawArchive : [],
+        envelope: false,
+    };
+}
+
 // NaN-safe 정수 파싱: 실패 시 fallback 반환
 function toInt(value, fallback) {
     const n = Number.parseInt(value, 10);
@@ -100,24 +140,48 @@ function toInt(value, fallback) {
  * @returns {{state: object|null, archive: Array}}
  */
 export function loadPersisted() {
-    const state = safeParseJSON(STATE_KEY, null);
-    const rawArchive = safeParseJSON(ARCHIVE_KEY, null);
-    const archive = Array.isArray(rawArchive) ? rawArchive : [];
+    const stored = readV1Snapshot();
 
-    if (state && typeof state === 'object') {
-        return { state, archive };
+    // envelope가 있으면 이것만 권위 있는 스냅샷으로 취급한다. 구 ARCHIVE_KEY에
+    // stale 값이 남아 있어도 섞지 않는다.
+    if (stored.envelope) {
+        return { state: stored.state, archive: stored.archive };
+    }
+
+    if (stored.state) {
+        // 기존 split 저장을 읽은 즉시 한 값으로 승격한다. 실패하면 기존 두 키를
+        // 그대로 읽을 수 있으므로 데이터는 훼손되지 않는다.
+        savePersisted({ state: stored.state, archive: stored.archive });
+        return { state: stored.state, archive: stored.archive };
     }
 
     // v1 상태 없음 → 레거시(v33) 마이그레이션 시도
     const migrated = migrateFromLegacy();
     if (migrated.state) {
-        // 다음 로드부터는 v1 경로를 타도록 저장 (실패해도 무해 — 다음에 다시 마이그레이션됨)
-        savePersistedState(migrated.state);
-        if (migrated.archive.length > 0) saveArchive(migrated.archive);
+        // 다음 로드부터는 v1 경로를 타도록 원자 저장
+        // (실패해도 무해 — 다음에 다시 마이그레이션됨)
+        savePersisted(migrated);
         return migrated;
     }
 
-    return { state: null, archive };
+    return { state: null, archive: stored.archive };
+}
+
+/**
+ * 상태 원자와 아카이브를 단일 envelope로 저장한다. localStorage.setItem 1회가
+ * 성공해야만 둘 다 새 스냅샷으로 보이므로 END_SESSION 중간 상태가 남지 않는다.
+ * @param {{state: object|null, archive: Array}} snapshot
+ * @returns {boolean} 저장 성공 여부
+ */
+export function savePersisted(snapshot) {
+    const state = normalizeStateAtom(snapshot?.state);
+    const archive = Array.isArray(snapshot?.archive) ? snapshot.archive : [];
+    return safeSetJSON(STATE_KEY, {
+        persistenceEnvelopeVersion: PERSISTENCE_ENVELOPE_VERSION,
+        schemaVersion: SCHEMA_VERSION,
+        state,
+        archive,
+    });
 }
 
 /**
@@ -128,7 +192,8 @@ export function loadPersisted() {
  */
 export function savePersistedState(partialAtom) {
     const payload = { schemaVersion: SCHEMA_VERSION, ...(partialAtom || {}) };
-    return safeSetJSON(STATE_KEY, payload);
+    const current = readV1Snapshot();
+    return savePersisted({ state: payload, archive: current.archive });
 }
 
 /**
@@ -137,7 +202,8 @@ export function savePersistedState(partialAtom) {
  * @returns {boolean} 저장 성공 여부
  */
 export function saveArchive(archive) {
-    return safeSetJSON(ARCHIVE_KEY, Array.isArray(archive) ? archive : []);
+    const current = readV1Snapshot();
+    return savePersisted({ state: current.state, archive });
 }
 
 /**

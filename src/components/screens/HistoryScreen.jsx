@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../state/GameContext.jsx';
 import { computeAllStats } from '../../engine/statsEngine.js';
+import DetailedReviewPanel from '../history/DetailedReviewPanel.jsx';
 
 const formatDate = (value) => {
     if (value === null || value === undefined || value === '') return '-';
@@ -27,10 +28,28 @@ const playerCountOf = (session) => {
     return names.size;
 };
 
+const incompleteCountOf = (session) => Number.isInteger(session?.incompleteHands)
+    ? session.incompleteHands
+    : (session?.hands || []).filter(hand => hand?.detailed?.enabled && !hand.detailed.completed).length;
+
 // raiseLevel → '2-Bet'/'3-Bet'… 라벨 (1=오픈(2벳), 2=3벳, …)
 const raiseLabel = (raiseLevel) => `${raiseLevel + 1}-Bet`;
 
 const actionLabel = (type) => (type ? type.charAt(0).toUpperCase() + type.slice(1) : '-');
+
+const formatCards = (cards) => (Array.isArray(cards) && cards.length > 0
+    ? cards.map(card => String(card)
+        .replace('s', '♠').replace('h', '♥').replace('d', '♦').replace('c', '♣')).join(' ')
+    : '모름');
+
+const amountLabel = (action) => {
+    if (!['call', 'bet', 'raise'].includes(action?.type)) return '';
+    if (action?.amountTo === null || action?.amountTo === undefined) {
+        return action?.precision === 'unknown' ? '금액 모름' : '';
+    }
+    const prefix = action.precision === 'estimated' ? '≈' : '';
+    return `${prefix}${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 }).format(action.amountTo)}`;
+};
 
 // 스탯별 색상 (구 화면 색 규칙 유지, den 0 → 회색)
 const statColor = (label, pct) => {
@@ -60,7 +79,7 @@ const StatBox = ({ label, stat }) => (
 );
 
 const HistoryScreen = () => {
-    const { archive, deleteArchivedSession, goBack } = useGame();
+    const { archive, deleteArchivedSession, goBack, settings } = useGame();
     const [selectedSessionId, setSelectedSessionId] = useState(null);
     const [viewMode, setViewMode] = useState('stats'); // 'stats' or 'hands'
     const [selectedHand, setSelectedHand] = useState(null);
@@ -114,16 +133,36 @@ const HistoryScreen = () => {
     const renderHandDetail = () => {
         if (!selectedHand) return null;
 
+        const detailed = selectedHand.detailed?.enabled ? selectedHand.detailed : null;
+        const board = detailed?.board || {};
+        const winners = Array.isArray(detailed?.winners) ? detailed.winners : [];
+        const seatName = seat => selectedHand.seats?.find(player => player.seat === seat)?.name
+            || `Seat ${Number(seat) + 1}`;
+
         return (
             <div className="hand-detail-view">
                 <div className="detail-header">
                     <h3>Hand #{selectedHand.handNo}</h3>
                     <p>{formatDate(selectedHand.startedAt)}</p>
+                    {detailed && <span className="detail-capture-badge">DETAILED · {detailed.completed ? 'COMPLETE' : 'INCOMPLETE'}</span>}
                 </div>
                 <div className="action-log">
+                    {detailed && (
+                        <div className="detailed-hand-summary">
+                            <div><strong>Hero</strong> {detailed.heroSeat === null || detailed.heroSeat === undefined ? '미지정' : seatName(detailed.heroSeat)}</div>
+                            <div><strong>Cards</strong> {formatCards(detailed.heroCards)}</div>
+                            <div><strong>Flop</strong> {formatCards(board.flop)}</div>
+                            <div><strong>Turn</strong> {formatCards(board.turn)}</div>
+                            <div><strong>River</strong> {formatCards(board.river)}</div>
+                            {winners.length > 0 && (
+                                <div><strong>Winner</strong> {[...new Set(winners.map(winner => seatName(winner.seat)))].join(', ')}</div>
+                            )}
+                        </div>
+                    )}
                     {selectedHand.actions && selectedHand.actions.length > 0 ? (
                         selectedHand.actions.map((action) => (
                             <div key={action.seq} className="action-row">
+                                {detailed && <span className="action-street">{action.street || 'preflop'}</span>}
                                 <span className="action-seat">Seat {action.seat + 1}</span>
                                 <span className="action-pos">[{action.position || '-'}]</span>
                                 <span className="action-name">({action.name})</span>
@@ -131,11 +170,16 @@ const HistoryScreen = () => {
                                 {action.type === 'raise' && action.raiseLevel > 0 && (
                                     <span className="action-detail"> [{raiseLabel(action.raiseLevel)}]</span>
                                 )}
+                                {detailed && amountLabel(action) && (
+                                    <span className="action-amount"> → {amountLabel(action)}</span>
+                                )}
+                                {action.isAllIn && <span className="action-allin"> ALL-IN</span>}
                             </div>
                         ))
                     ) : (
                         <div className="no-data">No actions recorded for this hand.</div>
                     )}
+                    {detailed && <DetailedReviewPanel hand={selectedHand} settings={settings} />}
                 </div>
             </div>
         );
@@ -159,6 +203,7 @@ const HistoryScreen = () => {
                             </div>
                             <div className="hand-summary">
                                 {(hand.seats || []).filter(s => !s.sittingOut).length} Players • {(hand.actions || []).length} Actions
+                                {hand.detailed?.enabled ? ` • 상세${hand.detailed.completed ? '' : ' 초안'}` : ''}
                             </div>
                         </div>
                     ))
@@ -207,7 +252,11 @@ const HistoryScreen = () => {
                 <div className="detail-header">
                     <h3>Session Details</h3>
                     <p>{formatDate(selectedSession.startedAt)}</p>
-                    <p>{selectedSession.totalHands} Hands Played • Blinds: {blindsLabel(selectedSession)}</p>
+                    <p>
+                        {selectedSession.totalHands} Hands Played
+                        {incompleteCountOf(selectedSession) > 0 ? ` • ${incompleteCountOf(selectedSession)} Draft` : ''}
+                        {' • '}Blinds: {blindsLabel(selectedSession)}
+                    </p>
 
                     <div className="view-toggle">
                         <button
@@ -253,7 +302,9 @@ const HistoryScreen = () => {
                                     <div className="session-info">
                                         <div className="session-date">{formatDate(session.startedAt)}</div>
                                         <div className="session-details">
-                                            {session.totalHands} Hands • {playerCountOf(session)} Players • {blindsLabel(session)}
+                                            {session.totalHands} Hands
+                                            {incompleteCountOf(session) > 0 ? ` + ${incompleteCountOf(session)} Draft` : ''}
+                                            {' • '}{playerCountOf(session)} Players • {blindsLabel(session)}
                                         </div>
                                     </div>
                                     <button
@@ -499,6 +550,17 @@ const HistoryScreen = () => {
                     overflow: hidden;
                     min-height: 0;
                 }
+                .detail-capture-badge {
+                    display: inline-block;
+                    padding: 4px 8px;
+                    border: 1px solid #38bdf8;
+                    border-radius: 999px;
+                    color: #bae6fd;
+                    background: #075985;
+                    font-size: 0.68rem;
+                    font-weight: 900;
+                    letter-spacing: 0.05em;
+                }
                 .action-log {
                     display: flex;
                     flex-direction: column;
@@ -508,6 +570,24 @@ const HistoryScreen = () => {
                     overflow-y: auto;
                     padding-right: 5px;
                     min-height: 0;
+                }
+                .detailed-hand-summary {
+                    display: grid;
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    gap: 7px;
+                    padding: 12px;
+                    border: 1px solid #475569;
+                    border-radius: 10px;
+                    background: #0f172a;
+                    color: #cbd5e1;
+                    font-size: 0.78rem;
+                }
+                .detailed-hand-summary strong {
+                    display: block;
+                    margin-bottom: 2px;
+                    color: #38bdf8;
+                    font-size: 0.65rem;
+                    text-transform: uppercase;
                 }
                 .action-row {
                     padding: 8px;
@@ -538,6 +618,27 @@ const HistoryScreen = () => {
                 .action-detail {
                     color: #e74c3c;
                     margin-left: 5px;
+                }
+                .action-street {
+                    display: inline-block;
+                    min-width: 46px;
+                    margin-right: 7px;
+                    padding: 2px 5px;
+                    border-radius: 5px;
+                    background: #1e293b;
+                    color: #93c5fd;
+                    font-size: 0.65rem;
+                    font-weight: bold;
+                    text-transform: uppercase;
+                }
+                .action-amount {
+                    color: #fbbf24;
+                    font-weight: bold;
+                }
+                .action-allin {
+                    color: #fb7185;
+                    font-size: 0.72rem;
+                    font-weight: 900;
                 }
             `}</style>
         </div>

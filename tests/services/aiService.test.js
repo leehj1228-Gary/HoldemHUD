@@ -1,6 +1,6 @@
 // 멀티 프로바이더 AI 서비스 테스트 — fetch를 모킹해 요청 형태/응답 추출/에러 경로를 검증
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { analyzeTable, resolveAiOptions, AI_PROVIDERS } from '../../src/services/aiService.js';
+import { analyzeTable, resolveAiOptions, AI_PROVIDERS, selectHeroHands } from '../../src/services/aiService.js';
 import { normalizeSettings, DEFAULT_SETTINGS } from '../../src/state/gameReducer.js';
 
 const VALID_RESULT = {
@@ -155,5 +155,21 @@ describe('resolveAiOptions / 설정 마이그레이션', () => {
         expect(normalizeSettings({ openaiModel: 'gpt-5.1' }).openaiModel).toBe('gpt-5.6-sol');
         expect(normalizeSettings({ openaiModel: 'gpt-5.6-terra' }).openaiModel).toBe('gpt-5.6-terra');
         expect(normalizeSettings({}).openaiModel).toBe('gpt-5.6-sol');
+    });
+});
+
+describe('selectHeroHands detailed draft policy', () => {
+    it('keeps completed detailed hands and excludes interrupted drafts', () => {
+        const base = {
+            dealerSeat: 0,
+            seats: [{ seat: 0, name: 'Hero', sittingOut: false }],
+            actions: [{ seat: 0, name: 'Hero', type: 'call' }],
+        };
+        const draft = { ...base, id: 'draft', detailed: { enabled: true, completed: false } };
+        const complete = { ...base, id: 'complete', detailed: { enabled: true, completed: true } };
+        const quick = { ...base, id: 'quick' };
+
+        expect(selectHeroHands([draft, complete, quick], 'Hero').map(hand => hand.id))
+            .toEqual(['complete', 'quick']);
     });
 });

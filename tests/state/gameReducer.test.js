@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { reducer, initialState, createInitialState, DEFAULT_BLINDS } from '../../src/state/gameReducer.js';
 import { deriveHandState, lastOptionSeat } from '../../src/engine/handEngine.js';
+import { deriveDetailedState } from '../../src/engine/detailedHandEngine.js';
 import { isValidHandRecord } from '../../src/engine/schema.js';
 
 // ---------------------------------------------------------------------------
@@ -604,6 +605,35 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
         expect(st.session).toBeNull();
     });
 
+    it('LOAD_PERSISTED: malformed detailed data is quarantined before replay', () => {
+        let saved = startSession({
+            playerCount: 2,
+            blinds: { sb: 1, bb: 2 },
+            currency: '$',
+            startedAt: 1000,
+            seatNames: ['Hero', 'Villain'],
+        });
+        saved = reducer(saved, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        const broken = JSON.parse(JSON.stringify(saved.session.currentHand));
+        broken.detailed.reveals = [{ seat: 1, cards: null }];
+
+        const loaded = reducer(initialState, {
+            type: 'LOAD_PERSISTED',
+            payload: {
+                state: { session: { ...saved.session, currentHand: broken } },
+                archive: [{ id: 'archived', hands: [broken] }],
+            },
+        });
+
+        expect(loaded.session.currentHand.detailed).toBeUndefined();
+        expect(isValidHandRecord(loaded.session.currentHand)).toBe(true);
+        expect(loaded.archive[0].hands).toEqual([]);
+        expect(() => deriveHandState(loaded.session.currentHand)).not.toThrow();
+    });
+
     it('RESET_ALL은 초기 상태를 반환한다 (리듀서는 순수 — 스토리지 삭제는 컨텍스트 몫)', () => {
         let st = startSession();
         st = reducer(st, { type: 'ADD_ROSTER', name: 'Kim' });
@@ -611,5 +641,153 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
         expect(st).toEqual(createInitialState());
         expect(st.session).toBeNull();
         expect(st.nav).toEqual(['home']);
+    });
+});
+
+describe('detailed hand reducer flow', () => {
+    const headsUpConfig = {
+        playerCount: 2,
+        blinds: { sb: 1, bb: 2 },
+        currency: '$',
+        startedAt: 2000,
+        seatNames: ['Hero', 'Villain'],
+    };
+
+    it('keeps quick mode compatible and enables an opt-in v2 ledger', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+
+        expect(st.session.currentHand.schemaVersion).toBe(2);
+        expect(st.session.currentHand.captureLevel).toBe('detailed');
+        expect(st.autoNext.pending).toBe(false);
+        const detail = deriveDetailedState(st.session.currentHand);
+        expect(detail.toActSeat).toBe(0);
+        expect(detail.toCall).toBe(1);
+        expect(detail.pot).toBe(3);
+    });
+
+    it('records streets, board, winner and advances only after completion', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 0, actionType: 'call', options: { precision: 'exact' },
+        });
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 1, actionType: 'check', options: { precision: 'exact' },
+        });
+        expect(deriveDetailedState(st.session.currentHand).streetClosed).toBe(true);
+        expect(st.autoNext.pending).toBe(false);
+
+        st = reducer(st, { type: 'ADVANCE_DETAILED_STREET', cards: ['As', '8d', '4c'] });
+        expect(st.session.currentHand.detailed.board.flop).toEqual(['As', '8d', '4c']);
+        expect(deriveDetailedState(st.session.currentHand).toActSeat).toBe(1);
+
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 1, actionType: 'check', options: { precision: 'exact' },
+        });
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 0, actionType: 'bet',
+            options: { amountTo: 2, precision: 'exact' },
+        });
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 1, actionType: 'fold', options: { precision: 'exact' },
+        });
+        expect(deriveDetailedState(st.session.currentHand).handOver).toBe(true);
+
+        st = reducer(st, { type: 'COMPLETE_DETAILED_HAND', payload: { winners: [] } });
+        expect(st.session.currentHand.status).toBe('complete');
+        expect(st.session.currentHand.detailed.winners).toEqual([{ seat: 0, potIndex: null }]);
+        expect(st.autoNext.pending).toBe(true);
+    });
+
+    it('can return to quick mode before any postflop detail is captured', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, { type: 'ENABLE_DETAILED_TRACKING', options: { chipUnit: 1 } });
+        st = reducer(st, { type: 'DISABLE_DETAILED_TRACKING' });
+        expect(st.session.currentHand.detailed).toBeUndefined();
+        expect(st.session.currentHand.captureLevel).toBeUndefined();
+    });
+
+    it('freezes table configuration as soon as detailed setup starts', () => {
+        let st = startSession({ ...headsUpConfig, playerCount: 3, seatNames: ['Hero', 'V1', 'V2'] });
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100, 2: 100 }, chipUnit: 1 },
+        });
+        st = reducer(st, {
+            type: 'SET_DETAILED_CARDS',
+            payload: { heroSeat: 0, heroCards: ['As', 'Kd'] },
+        });
+
+        expect(reducer(st, { type: 'CYCLE_STRADDLE' })).toBe(st);
+        expect(reducer(st, { type: 'TOGGLE_SITOUT', seat: 1 })).toBe(st);
+        expect(reducer(st, { type: 'SET_DEALER', seat: 1 })).toBe(st);
+
+        const renamed = reducer(st, { type: 'RENAME_SEAT', seat: 0, name: 'Hero corrected' });
+        expect(renamed.session.currentHand.detailed.heroCards).toEqual(['As', 'Kd']);
+        expect(renamed.session.currentHand.seats[0].name).toBe('Hero corrected');
+    });
+
+    it('blocks manual next while incomplete but allows it after completion or cancel', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        expect(reducer(st, { type: 'NEXT_HAND', endedAt: 3000 })).toBe(st);
+
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 0, actionType: 'fold', options: { precision: 'exact' },
+        });
+        st = reducer(st, { type: 'COMPLETE_DETAILED_HAND', payload: { winners: [] } });
+        st = reducer(st, { type: 'CANCEL_AUTO_NEXT' });
+        expect(st.autoNext.pending).toBe(false);
+
+        st = reducer(st, { type: 'NEXT_HAND', endedAt: 3000 });
+        expect(st.session.hands).toHaveLength(1);
+        expect(st.session.hands[0].detailed.completed).toBe(true);
+        expect(st.session.handNo).toBe(2);
+    });
+
+    it('restores pending auto-next when a completed detailed current hand reloads', () => {
+        let saved = startSession(headsUpConfig);
+        saved = reducer(saved, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        saved = reducer(saved, {
+            type: 'RECORD_DETAILED_ACTION', seat: 0, actionType: 'fold', options: { precision: 'exact' },
+        });
+        saved = reducer(saved, { type: 'COMPLETE_DETAILED_HAND', payload: { winners: [] } });
+
+        const loaded = reducer(initialState, {
+            type: 'LOAD_PERSISTED',
+            payload: { state: { session: saved.session, roster: [], settings: {} }, archive: [] },
+        });
+        expect(loaded.session.currentHand.detailed.completed).toBe(true);
+        expect(loaded.autoNext.pending).toBe(true);
+    });
+
+    it('archives an interrupted detailed hand as a draft, not a completed sample', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 0, actionType: 'call', options: { precision: 'exact' },
+        });
+        st = reducer(st, { type: 'END_SESSION', endedAt: 4000 });
+
+        expect(st.archive[0].hands).toHaveLength(1);
+        expect(st.archive[0].hands[0].status).toBe('incomplete');
+        expect(st.archive[0].totalHands).toBe(0);
+        expect(st.archive[0].incompleteHands).toBe(1);
     });
 });

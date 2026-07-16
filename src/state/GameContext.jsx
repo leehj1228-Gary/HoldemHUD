@@ -4,8 +4,13 @@
 import React, { createContext, useContext, useReducer, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { reducer, initialState } from './gameReducer.js';
 import { deriveHandState, legalActionsFor as engineLegalActionsFor } from '../engine/handEngine.js';
+import {
+    deriveDetailedState,
+    legalDetailedActions,
+    deriveSidePots,
+} from '../engine/detailedHandEngine.js';
 import { computeAllStats } from '../engine/statsEngine.js';
-import { loadPersisted, savePersistedState, saveArchive, resetAllData as storageResetAllData } from '../storage/storage.js';
+import { loadPersisted, savePersisted, resetAllData as storageResetAllData } from '../storage/storage.js';
 
 const GameContext = createContext(null);
 
@@ -40,40 +45,44 @@ export function GameProvider({ children }) {
         }
     }, []);
 
-    // 저장 이펙트 1: session/roster/settings → 300ms 디바운스 (로드 전 렌더는 건너뜀).
-    // 예외 1: 세션 정체성 전환(null↔객체)은 즉시 저장 — END_SESSION의 archive 쓰기와
-    //         session=null 쓰기가 원자적으로 함께 착지하도록.
-    // 예외 2: pagehide/visibilitychange(hidden) 시 pendingSaveRef로 동기 플러시 —
-    //         앱 강제 종료·하드웨어 백 종료로 마지막 300ms 쓰기가 유실되는 것 방지.
+    // session/roster/settings/archive를 항상 하나의 envelope로 저장한다.
+    // END_SESSION에서 session:null과 새 archive가 같은 setItem에 함께 커밋되므로
+    // 둘 중 한쪽만 영속화되는 중간 상태가 생기지 않는다.
+    // 일반 진행은 300ms 디바운스하고, 세션 정체성·archive 변경은 즉시 저장한다.
+    // pagehide/visibilitychange(hidden)에서는 pending envelope를 동기 플러시한다.
     const { session, roster, settings, archive, autoNext } = state;
-    const pendingSaveRef = useRef({ session: null, roster: [], settings: null, dirty: false });
+    const pendingSaveRef = useRef({ state: null, archive: [], dirty: false });
     const prevSessionRef = useRef(null);
+    const prevArchiveRef = useRef(archive);
     useEffect(() => {
         if (!hydrated) return undefined;
-        pendingSaveRef.current = { session, roster, settings, dirty: true };
+        const stateAtom = { session, roster, settings };
+        pendingSaveRef.current = { state: stateAtom, archive, dirty: true };
 
         const identityChanged = (prevSessionRef.current === null) !== (session === null);
+        const archiveChanged = prevArchiveRef.current !== archive;
         prevSessionRef.current = session;
-        if (identityChanged) {
+        prevArchiveRef.current = archive;
+        if (identityChanged || archiveChanged) {
             pendingSaveRef.current.dirty = false;
-            reportSaveFailure(savePersistedState({ session, roster, settings }));
+            reportSaveFailure(savePersisted({ state: stateAtom, archive }));
             return undefined;
         }
 
         const timer = setTimeout(() => {
             pendingSaveRef.current.dirty = false;
-            reportSaveFailure(savePersistedState({ session, roster, settings }));
+            reportSaveFailure(savePersisted({ state: stateAtom, archive }));
         }, 300);
         return () => clearTimeout(timer);
-    }, [hydrated, session, roster, settings, reportSaveFailure]);
+    }, [hydrated, session, roster, settings, archive, reportSaveFailure]);
 
-    // 저장 이펙트 1b: 페이지 이탈 시 디바운스 대기 중인 쓰기를 동기 플러시
+    // 페이지 이탈 시 디바운스 대기 중인 envelope를 동기 플러시
     useEffect(() => {
         const flush = () => {
             const p = pendingSaveRef.current;
             if (!p.dirty) return;
             p.dirty = false;
-            savePersistedState({ session: p.session, roster: p.roster, settings: p.settings });
+            reportSaveFailure(savePersisted({ state: p.state, archive: p.archive }));
         };
         const onVisibilityChange = () => {
             if (document.visibilityState === 'hidden') flush();
@@ -84,13 +93,7 @@ export function GameProvider({ children }) {
             window.removeEventListener('pagehide', flush);
             document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, []);
-
-    // 저장 이펙트 2: archive 변경 시 즉시 저장 (로드 전 렌더는 건너뜀)
-    useEffect(() => {
-        if (!hydrated) return;
-        reportSaveFailure(saveArchive(archive));
-    }, [hydrated, archive, reportSaveFailure]);
+    }, [reportSaveFailure]);
 
     // 자동 다음핸드 타이머: pending이 true가 되면 1500ms 후 발화.
     // 리듀서가 멱등(AUTO_NEXT_FIRED는 pending일 때만 적용)이라 stale closure 문제가 없다.
@@ -127,9 +130,26 @@ export function GameProvider({ children }) {
     const dealerSeat = session ? session.dealerSeat : null;
     const sessionHands = session ? session.hands : EMPTY_SEATS;
 
-    const derived = useMemo(
-        () => (currentHand ? deriveHandState(currentHand) : EMPTY_DERIVED),
-        [currentHand]);
+    const isDetailed = !!currentHand?.detailed?.enabled;
+    const derived = useMemo(() => {
+        if (!currentHand) return EMPTY_DERIVED;
+        if (!currentHand.detailed?.enabled) return deriveHandState(currentHand);
+        const detail = deriveDetailedState(currentHand);
+        const sidePotState = deriveSidePots(currentHand);
+        const foldedSeats = new Set(detail.players.filter(player => player.folded).map(player => player.seat));
+        const livePlayers = detail.players.filter(player => player.active && !player.folded);
+        return {
+            ...detail,
+            foldedSeats,
+            actedSinceLastRaise: new Set(),
+            isOver: detail.handOver,
+            endedByFold: livePlayers.length <= 1,
+            streetComplete: detail.streetClosed,
+            handComplete: detail.isComplete || detail.handOver,
+            sidePotState,
+            legalActions: detail.toActSeat === null ? [] : legalDetailedActions(currentHand, detail.toActSeat),
+        };
+    }, [currentHand]);
     // 포지션은 진행 중 핸드의 동결 스냅샷에서 파생 — 라이브 좌석 재계산과의 괴리 방지.
     // (핸드 사이 구성 변경 시 currentHand가 재생성되므로 항상 최신이다.)
     const positions = useMemo(() => {
@@ -143,7 +163,12 @@ export function GameProvider({ children }) {
         () => computeAllStats(currentHand ? [...sessionHands, currentHand] : sessionHands),
         [sessionHands, currentHand]);
     const legalActionsFor = useCallback(
-        (seat) => (currentHand ? engineLegalActionsFor(currentHand, seat) : []),
+        (seat) => {
+            if (!currentHand) return [];
+            return currentHand.detailed?.enabled
+                ? legalDetailedActions(currentHand, seat)
+                : engineLegalActionsFor(currentHand, seat);
+        },
         [currentHand]);
 
     // ── 액션 래퍼 (dispatch만 사용 — 안정 참조) ────────────────────────
@@ -154,6 +179,14 @@ export function GameProvider({ children }) {
         endSession: () => dispatch({ type: 'END_SESSION' }),
         resumeSession: () => { if (stateRef.current.session) dispatch({ type: 'NAV_PUSH', screen: 'game' }); },
         recordAction: (seat, actionType) => dispatch({ type: 'RECORD_ACTION', seat, actionType }),
+        enableDetailedTracking: (options) => dispatch({ type: 'ENABLE_DETAILED_TRACKING', options }),
+        disableDetailedTracking: () => dispatch({ type: 'DISABLE_DETAILED_TRACKING' }),
+        recordDetailedAction: (seat, actionType, options) => dispatch({
+            type: 'RECORD_DETAILED_ACTION', seat, actionType, options,
+        }),
+        advanceDetailedStreet: (cards) => dispatch({ type: 'ADVANCE_DETAILED_STREET', cards }),
+        setDetailedCards: (payload) => dispatch({ type: 'SET_DETAILED_CARDS', payload }),
+        completeDetailedHand: (payload) => dispatch({ type: 'COMPLETE_DETAILED_HAND', payload }),
         undo: () => dispatch({ type: 'UNDO' }),
         nextHand: () => dispatch({ type: 'NEXT_HAND' }),
         cancelAutoNext: () => dispatch({ type: 'CANCEL_AUTO_NEXT' }),
@@ -182,6 +215,7 @@ export function GameProvider({ children }) {
         currency: session ? session.currency : '$',
         handNo: session ? session.handNo : 0,
         currentHand,
+        isDetailed,
         derived,
         positions,
         legalActionsFor,

@@ -3,9 +3,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
     STATE_KEY,
     ARCHIVE_KEY,
+    PERSISTENCE_ENVELOPE_VERSION,
     LEGACY_KEYS,
     setStorageAdapter,
     loadPersisted,
+    savePersisted,
     savePersistedState,
     saveArchive,
     resetAllData,
@@ -140,6 +142,61 @@ describe('v1 roundtrip', () => {
         expect(loaded.state.schemaVersion).toBe(1);
     });
 
+    it('END_SESSION 스냅샷은 state+archive를 STATE_KEY 한 번에 커밋한다', () => {
+        const atom = {
+            session: null,
+            roster: ['A'],
+            settings: { geminiApiKey: '', aiModel: 'gemini-3-pro-preview' },
+        };
+        const archive = [{ id: 'ended', schemaVersion: 1, totalHands: 4, hands: [] }];
+        const setSpy = vi.spyOn(mem, 'setItem');
+
+        expect(savePersisted({ state: atom, archive })).toBe(true);
+
+        expect(setSpy).toHaveBeenCalledTimes(1);
+        expect(setSpy).toHaveBeenCalledWith(STATE_KEY, expect.any(String));
+        expect(mem.getItem(ARCHIVE_KEY)).toBeNull();
+
+        const envelope = JSON.parse(mem.getItem(STATE_KEY));
+        expect(envelope.persistenceEnvelopeVersion).toBe(PERSISTENCE_ENVELOPE_VERSION);
+        expect(envelope.state.session).toBeNull();
+        expect(envelope.archive).toEqual(archive);
+        expect(loadPersisted()).toEqual({
+            state: { schemaVersion: 1, ...atom },
+            archive,
+        });
+    });
+
+    it('envelope가 있으면 stale ARCHIVE_KEY를 섞지 않는다', () => {
+        const archive = [{ id: 'authoritative', hands: [] }];
+        savePersisted({
+            state: { session: null, roster: [], settings: {} },
+            archive,
+        });
+        mem.setItem(ARCHIVE_KEY, JSON.stringify([{ id: 'stale', hands: [] }]));
+
+        expect(loadPersisted().archive).toEqual(archive);
+    });
+
+    it('기존 split STATE_KEY/ARCHIVE_KEY를 읽고 단일 envelope로 승격한다', () => {
+        const legacyState = {
+            schemaVersion: 1,
+            session: { id: 'active' },
+            roster: ['A'],
+            settings: {},
+        };
+        const legacyArchive = [{ id: 'old', hands: [] }];
+        mem.setItem(STATE_KEY, JSON.stringify(legacyState));
+        mem.setItem(ARCHIVE_KEY, JSON.stringify(legacyArchive));
+
+        expect(loadPersisted()).toEqual({ state: legacyState, archive: legacyArchive });
+
+        const promoted = JSON.parse(mem.getItem(STATE_KEY));
+        expect(promoted.persistenceEnvelopeVersion).toBe(PERSISTENCE_ENVELOPE_VERSION);
+        expect(promoted.state).toEqual(legacyState);
+        expect(promoted.archive).toEqual(legacyArchive);
+    });
+
     it('손상된 v1 JSON은 throw 없이 무시', () => {
         vi.spyOn(console, 'error').mockImplementation(() => {});
         mem.setItem(STATE_KEY, '{not json');
@@ -162,6 +219,38 @@ describe('quota error swallowed', () => {
         expect(savePersistedState({ session: null })).toBe(false);
         expect(saveArchive([{ id: 'x' }])).toBe(false);
         expect(errSpy).toHaveBeenCalled();
+    });
+
+    it('새 envelope 쓰기가 실패하면 이전 state+archive 쌍이 그대로 남는다', () => {
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const activeSnapshot = {
+            state: {
+                session: { id: 'active-session' },
+                roster: ['A'],
+                settings: {},
+            },
+            archive: [{ id: 'previous-session', hands: [] }],
+        };
+        expect(savePersisted(activeSnapshot)).toBe(true);
+        const previousRaw = mem.getItem(STATE_KEY);
+
+        setStorageAdapter({
+            getItem: mem.getItem,
+            setItem: () => { throw new DOMException('quota', 'QuotaExceededError'); },
+            removeItem: mem.removeItem,
+        });
+        expect(savePersisted({
+            state: { ...activeSnapshot.state, session: null },
+            archive: [...activeSnapshot.archive, { id: 'active-session', hands: [] }],
+        })).toBe(false);
+        expect(mem.getItem(STATE_KEY)).toBe(previousRaw);
+
+        setStorageAdapter(mem);
+        expect(loadPersisted()).toEqual({
+            state: { schemaVersion: 1, ...activeSnapshot.state },
+            archive: activeSnapshot.archive,
+        });
+        expect(errSpy).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -255,7 +344,7 @@ describe('migrateFromLegacy', () => {
 
         // 다음 로드부터 v1 경로를 타도록 저장됨
         expect(mem.getItem(STATE_KEY)).not.toBeNull();
-        expect(mem.getItem(ARCHIVE_KEY)).not.toBeNull();
+        expect(JSON.parse(mem.getItem(STATE_KEY)).persistenceEnvelopeVersion).toBe(PERSISTENCE_ENVELOPE_VERSION);
 
         // 재로드 시 동일 결과 (마이그레이션 재실행 아님)
         const reloaded = loadPersisted();

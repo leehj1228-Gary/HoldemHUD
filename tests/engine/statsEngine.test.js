@@ -461,3 +461,37 @@ describe('집계와 computeStats 래퍼', () => {
         expect(computeStats(hands, '  P5  ').dealt).toBe(2);
     });
 });
+
+describe('HandRecord v2 postflop compatibility', () => {
+    it('ignores postflop actions when calculating preflop stats', () => {
+        const hand = buildHand({
+            seats: seats6(),
+            actions: [[3, 'fold'], [4, 'fold'], [5, 'fold'], [0, 'fold'], [1, 'call'], [2, 'check']],
+        });
+        hand.actions.push(
+            { seq: 6, seat: 2, name: 'P2', position: 'BB', type: 'raise', street: 'flop', raiseLevel: 0 },
+            { seq: 7, seat: 1, name: 'P1', position: 'SB', type: 'call', street: 'flop', raiseLevel: 0 },
+        );
+
+        const stats = computeAllStats([hand]);
+        expect(ratio(stats.get('P2').vpip)).toEqual({ num: 0, den: 1, pct: 0 });
+        expect(ratio(stats.get('P2').pfr)).toEqual({ num: 0, den: 1, pct: 0 });
+        expect(ratio(stats.get('P1').vpip)).toEqual({ num: 1, den: 1, pct: 100 });
+    });
+
+    it('excludes interrupted detailed drafts from every denominator', () => {
+        const draft = buildHand({
+            seats: seats6(),
+            actions: [[3, 'fold']],
+        });
+        draft.status = 'incomplete';
+        draft.detailed = { enabled: true, completed: false };
+
+        expect(computeAllStats([draft]).size).toBe(0);
+        expect(computeStats([draft], 'P3').dealt).toBe(0);
+
+        draft.status = 'complete';
+        draft.detailed.completed = true;
+        expect(computeAllStats([draft]).get('P3').dealt).toBe(1);
+    });
+});

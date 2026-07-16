@@ -4,6 +4,12 @@
 // 브라우저 클라이언트 앱이므로 세 프로바이더 모두 raw fetch로 직접 호출한다 (CORS 지원 확인됨).
 // 프롬프트의 핸드 데이터는 새 스키마 기준: seat은 전부 0-based, 액션은 name/position/raiseLevel 포함.
 
+import {
+    buildDetailedReviewPayload,
+    buildDecisionPrompt,
+    validateDecisionReview,
+} from './detailedReview.js';
+
 const TIMEOUT_MS = 60000;
 
 // 프로바이더 메타데이터 — 설정 UI와 옵션 해석이 공유하는 단일 정의
@@ -205,6 +211,151 @@ async function callAI(prompt, { provider = 'gemini', apiKey, model } = {}) {
     }
 }
 
+const DETAILED_ANALYSIS_MODE = 'heuristic_no_solver';
+const DETAILED_MAX_DECISIONS = 30;
+const DETAILED_MAX_CONCURRENCY = 2;
+const DETAILED_ACTION_TYPES = new Set(['fold', 'check', 'call', 'bet', 'raise']);
+
+function detailedError(error, type) {
+    const message = error instanceof Error ? error.message : String(error || '알 수 없는 오류');
+    return {
+        type,
+        message: message.slice(0, 1000),
+    };
+}
+
+async function mapDetailedWithLimit(entries, mapper) {
+    const results = new Array(entries.length);
+    let cursor = 0;
+
+    async function worker() {
+        while (cursor < entries.length) {
+            const index = cursor;
+            cursor += 1;
+            results[index] = await mapper(entries[index], index);
+        }
+    }
+
+    const workerCount = Math.min(DETAILED_MAX_CONCURRENCY, entries.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
+}
+
+function detailedDecisionStub(hand, action) {
+    return {
+        decisionId: `${hand.id}:a${action.seq}`,
+        decisionSeq: action.seq,
+        street: typeof action.street === 'string' ? action.street.toLowerCase() : 'preflop',
+    };
+}
+
+/**
+ * Analyze every recorded Hero decision in one detailed hand.
+ * Each decision gets an independent provider call containing only its knowledge-cutoff
+ * snapshot. Provider/response failures are isolated per item; configuration errors such
+ * as a missing API key still throw, matching the existing AI coach entry points.
+ *
+ * @param {object} hand detailed HandRecord
+ * @param {{provider?: string, apiKey: string, model?: string}} options
+ * @returns {Promise<{analysisMode:string, handId:string, generatedAt:string,
+ *   items:Array<{decision:object, review:object|null, error:object|null}>}>}
+ */
+export async function analyzeDetailedHand(hand, options) {
+    const aiOptions = options && typeof options === 'object' ? options : {};
+    const providerMeta = AI_PROVIDERS[aiOptions.provider] || AI_PROVIDERS.gemini;
+    // Existing analyzeTable/analyzeSessionLeaks surface missing credentials as a blocking
+    // setup error. Avoid returning the same missing-key error once per decision.
+    requireKey(aiOptions.apiKey, providerMeta);
+
+    if (!hand || typeof hand !== 'object' || !hand.detailed?.enabled) {
+        throw new Error('상세 기록이 활성화된 핸드가 필요합니다');
+    }
+    if (typeof hand.id !== 'string' || !hand.id.trim()) {
+        throw new Error('상세 핸드 ID가 필요합니다');
+    }
+    if (!Array.isArray(hand.actions) || !Number.isInteger(hand.detailed.heroSeat)) {
+        throw new Error('상세 핸드의 히어로 또는 액션 기록이 올바르지 않습니다');
+    }
+
+    const heroSeat = hand.detailed.heroSeat;
+    const heroActions = hand.actions
+        .filter(action => action && action.seat === heroSeat
+            && Number.isInteger(action.seq) && DETAILED_ACTION_TYPES.has(action.type))
+        .slice()
+        .sort((a, b) => a.seq - b.seq);
+    if (heroActions.length === 0) throw new Error('분석할 히어로 액션이 없습니다');
+    if (heroActions.length > DETAILED_MAX_DECISIONS) {
+        throw new Error(`한 핸드에서 분석할 수 있는 히어로 결정은 최대 ${DETAILED_MAX_DECISIONS}개입니다`);
+    }
+    if (new Set(heroActions.map(action => action.seq)).size !== heroActions.length) {
+        throw new Error('히어로 액션 seq가 중복되었습니다');
+    }
+
+    const prepared = heroActions.map(action => {
+        const fallbackDecision = detailedDecisionStub(hand, action);
+        try {
+            const payload = buildDetailedReviewPayload(hand, [{ decisionSeq: action.seq }]);
+            return {
+                shared: payload.shared,
+                decision: payload.decisions[0],
+                error: null,
+            };
+        } catch (error) {
+            return {
+                shared: null,
+                decision: fallbackDecision,
+                error: detailedError(error, 'payload'),
+            };
+        }
+    });
+
+    const items = await mapDetailedWithLimit(prepared, async entry => {
+        if (entry.error) return { decision: entry.decision, review: null, error: entry.error };
+
+        let prompt;
+        try {
+            prompt = buildDecisionPrompt(entry.shared, entry.decision);
+        } catch (error) {
+            return {
+                decision: entry.decision,
+                review: null,
+                error: detailedError(error, 'payload'),
+            };
+        }
+        let raw;
+        try {
+            raw = await callAI(prompt, aiOptions);
+        } catch (error) {
+            return {
+                decision: entry.decision,
+                review: null,
+                error: detailedError(error, 'provider'),
+            };
+        }
+
+        try {
+            return {
+                decision: entry.decision,
+                review: validateDecisionReview(raw, entry.decision),
+                error: null,
+            };
+        } catch (error) {
+            return {
+                decision: entry.decision,
+                review: null,
+                error: detailedError(error, 'validation'),
+            };
+        }
+    });
+
+    return {
+        analysisMode: DETAILED_ANALYSIS_MODE,
+        handId: hand.id.trim(),
+        generatedAt: new Date().toISOString(),
+        items,
+    };
+}
+
 /**
  * 테이블 상태를 분석해 프리플랍 전략(추천 레인지 169콤보/요약/플레이어 팁)을 받는다.
  * @param {object} tableData - { blinds:{sb,bb}|null, currency, straddleCount,
@@ -293,7 +444,9 @@ export async function analyzeTable(tableData, options) {
  */
 export function selectHeroHands(hands, heroName, limit = 50) {
     const hero = typeof heroName === 'string' ? heroName.trim() : '';
-    const list = Array.isArray(hands) ? hands : [];
+    const list = Array.isArray(hands)
+        ? hands.filter(hand => !hand?.detailed?.enabled || hand.detailed.completed === true)
+        : [];
     if (!hero) return [];
 
     let relevant = list.filter(h =>
@@ -318,14 +471,16 @@ function compactHand(hand) {
         seats: (hand.seats || [])
             .filter(s => s && !s.sittingOut)
             .map(s => ({ seat: s.seat, name: s.name, position: s.position ?? null })),
-        actions: (hand.actions || []).map(a => ({
-            seq: a.seq,
-            seat: a.seat,
-            name: a.name,
-            position: a.position ?? null,
-            type: a.type,
-            raiseLevel: a.raiseLevel || 0,
-        })),
+        actions: (hand.actions || [])
+            .filter(a => !a.street || String(a.street).toLowerCase() === 'preflop')
+            .map(a => ({
+                seq: a.seq,
+                seat: a.seat,
+                name: a.name,
+                position: a.position ?? null,
+                type: a.type,
+                raiseLevel: a.raiseLevel || 0,
+            })),
     };
 }
 

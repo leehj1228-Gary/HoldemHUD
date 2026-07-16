@@ -17,6 +17,11 @@ function activeNamesOf(hand) {
     return names;
 }
 
+function completedAnalysisHands(hands) {
+    return (Array.isArray(hands) ? hands : [])
+        .filter(hand => !hand?.detailed?.enabled || hand.detailed.completed === true);
+}
+
 function sessionDateLabel(startedAt) {
     if (!startedAt) return '이전 세션';
     const d = new Date(startedAt);
@@ -46,10 +51,11 @@ const SessionLeaks = ({ ai }) => {
     const sessionOptions = useMemo(() => {
         const options = [];
         if (session) {
-            options.push({ id: 'current', label: 'Current Session', sub: `${sessionHands.length} Hands`, hands: sessionHands });
+            const hands = completedAnalysisHands(sessionHands);
+            options.push({ id: 'current', label: 'Current Session', sub: `${hands.length} Hands`, hands });
         }
         for (const s of archive) {
-            const hands = Array.isArray(s.hands) ? s.hands : [];
+            const hands = completedAnalysisHands(s.hands);
             const playerCount = new Set(hands.flatMap(activeNamesOf)).size;
             options.push({
                 id: s.id,

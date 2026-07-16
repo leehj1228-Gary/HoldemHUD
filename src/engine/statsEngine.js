@@ -166,6 +166,9 @@ function replayHand(hand, stats) {
 
     for (const a of hand.actions) {
         if (!a || typeof a.seat !== 'number') continue;
+        // HandRecord v2 may include postflop actions in the same event ledger.
+        // Legacy records without a street are preflop records.
+        if (a.street && String(a.street).toLowerCase() !== 'preflop') continue;
         const seatRec = activeBySeat.get(a.seat);
 
         if (seatRec) {
@@ -263,6 +266,10 @@ export function computeAllStats(hands) {
     if (!Array.isArray(hands)) return stats;
     for (const hand of hands) {
         if (!isValidHandRecord(hand)) continue;
+        // Detailed hands can be archived as recoverable drafts when a session is
+        // stopped mid-hand. They are evidence, but not a completed statistical
+        // sample and must not inflate dealt/VPIP/PFR denominators.
+        if (hand.detailed?.enabled && hand.detailed.completed !== true) continue;
         replayHand(hand, stats);
     }
     for (const st of stats.values()) finalizeStats(st);

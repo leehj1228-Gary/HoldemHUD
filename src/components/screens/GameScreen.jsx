@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import { useGame } from '../../state/GameContext';
 import Table from '../game/Table';
 import PlayerList from '../game/PlayerList';
+import DetailedTracker from '../game/DetailedTracker';
+import DetailedSetupSheet from '../game/DetailedSetupSheet';
 import StatsModal from '../common/StatsModal';
 import SeatModal from '../common/SeatModal';
+import { chipUnitForBlinds } from '../../engine/detailedHandEngine.js';
 
 const GameScreen = () => {
     const {
@@ -11,10 +14,14 @@ const GameScreen = () => {
         straddleCount, cycleStraddle, nextHand, undo, swapSeats, setDealer,
         autoNextPending, cancelAutoNext,
         blinds, currency, currentHand, sessionHands,
+        derived, isDetailed, enableDetailedTracking, disableDetailedTracking,
+        recordDetailedAction, advanceDetailedStreet, setDetailedCards, completeDetailedHand,
     } = useGame();
 
     // 진행 중 핸드(액션 1개 이상)면 테이블 구성 변경 불가 — 리듀서가 no-op하므로 UI도 비활성화
-    const handInProgress = !!(currentHand && currentHand.actions.length > 0);
+    const handInProgress = !!(currentHand
+        && (currentHand.actions.length > 0 || currentHand.detailed?.enabled));
+    const detailedIncomplete = isDetailed && !currentHand?.detailed?.completed;
 
     const [isStatsOpen, setIsStatsOpen] = useState(false);
     const [isSeatModalOpen, setIsSeatModalOpen] = useState(false);
@@ -23,6 +30,64 @@ const GameScreen = () => {
     const [swapSourceIndex, setSwapSourceIndex] = useState(null);
     const [isDealerMoveMode, setIsDealerMoveMode] = useState(false);
     const [isExitConfirmOpen, setIsExitConfirmOpen] = useState(false);
+    const [isDetailSetupOpen, setIsDetailSetupOpen] = useState(false);
+
+    const startDetailedTracking = (options = {}) => {
+        enableDetailedTracking({
+            ...options,
+            chipUnit: chipUnitForBlinds(blinds),
+        });
+        setIsDetailSetupOpen(false);
+    };
+
+    const handleDisableDetailed = () => {
+        const detailed = currentHand?.detailed;
+        const hasPostflopAction = currentHand?.actions?.some(
+            action => action.street && action.street !== 'preflop');
+        const hasBoard = Object.values(detailed?.board || {})
+            .some(cards => Array.isArray(cards) && cards.length > 0);
+        if (detailed?.street !== 'preflop' || hasPostflopAction || hasBoard) {
+            window.alert('플랍 기록이 시작된 상세 핸드는 간편 기록으로 되돌릴 수 없습니다. 핸드를 완료해 주세요.');
+            return;
+        }
+        disableDetailedTracking();
+    };
+
+    const handleDetailedAction = (seat, type, options = {}) => {
+        const precision = options.amountQuality === 'approximate'
+            ? 'estimated'
+            : (options.amountQuality || options.precision || 'exact');
+        recordDetailedAction(seat, type, {
+            amountTo: options.amount,
+            precision,
+            isAllIn: !!options.isAllIn,
+            allInKind: options.allInKind,
+            amountSource: options.sizeSource,
+        });
+    };
+
+    const handleDetailedCards = (payload = {}) => {
+        if (payload.target === 'heroSeat') {
+            setDetailedCards({ heroSeat: payload.seat });
+            return;
+        }
+        if (payload.target === 'heroCards') {
+            setDetailedCards({ heroSeat: payload.seat, heroCards: payload.cards || [] });
+            return;
+        }
+        if (payload.target === 'board') {
+            setDetailedCards({ street: payload.street, cards: payload.cards || [] });
+            return;
+        }
+        if (payload.target === 'showdownCards') {
+            const existing = currentHand?.detailed?.reveals || [];
+            const reveals = existing.filter(reveal => reveal.seat !== payload.seat);
+            if (Array.isArray(payload.cards) && payload.cards.length === 2) {
+                reveals.push({ seat: payload.seat, cards: payload.cards });
+            }
+            setDetailedCards({ reveals });
+        }
+    };
 
     // seat: 0-based 고정 좌석 번호 (설계 계약 §2)
     const handlePlayerClick = (seat) => {
@@ -97,6 +162,23 @@ const GameScreen = () => {
                 >
                     {straddleCount > 0 ? `Straddle: ${straddleCount}` : 'Straddle Off'}
                 </button>
+
+                <button
+                    type="button"
+                    onClick={() => setIsDetailSetupOpen(true)}
+                    disabled={isDetailed || !currentHand}
+                    style={{
+                        padding: '7px 10px',
+                        border: '1px solid #38bdf8',
+                        borderRadius: '8px',
+                        background: isDetailed ? '#075985' : '#0f172a',
+                        color: '#e0f2fe',
+                        fontWeight: 'bold',
+                        opacity: isDetailed || !currentHand ? 0.6 : 1,
+                    }}
+                >
+                    {isDetailed ? '★ 상세 기록 중' : '☆ 상세 기록'}
+                </button>
             </div>
 
             <Table
@@ -126,7 +208,19 @@ const GameScreen = () => {
                 {sessionHands.length} hands (Total)
             </div>
 
-            <PlayerList onPlayerClick={handlePlayerClick} />
+            {isDetailed ? (
+                <DetailedTracker
+                    hand={currentHand}
+                    derived={derived}
+                    onAction={handleDetailedAction}
+                    onAdvanceStreet={advanceDetailedStreet}
+                    onSetCards={handleDetailedCards}
+                    onComplete={completeDetailedHand}
+                    onDisableDetail={handleDisableDetailed}
+                />
+            ) : (
+                <PlayerList onPlayerClick={handlePlayerClick} />
+            )}
 
             {isSwapMode && (
                 <div id="swap-msg" className="swap-msg" style={{ display: 'block' }}>
@@ -150,7 +244,12 @@ const GameScreen = () => {
             )}
 
             <div className="bottom-controls">
-                <button className="ctrl-btn btn-next" onClick={nextHand}>
+                <button
+                    className="ctrl-btn btn-next"
+                    onClick={nextHand}
+                    disabled={detailedIncomplete}
+                    style={{ opacity: detailedIncomplete ? 0.4 : 1 }}
+                >
                     다음 핸드 ▶
                 </button>
                 <button className="ctrl-btn btn-coach" onClick={() => navigateTo('coach')} style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', border: '1px solid #5b6bdc' }}>
@@ -186,6 +285,15 @@ const GameScreen = () => {
                 isOpen={isSeatModalOpen}
                 onClose={() => setIsSeatModalOpen(false)}
                 seatIndex={selectedSeatIndex}
+            />
+
+            <DetailedSetupSheet
+                open={isDetailSetupOpen}
+                seats={currentHand?.seats || seats}
+                bigBlind={blinds?.bb || 1}
+                onConfirm={startDetailedTracking}
+                onSkip={() => startDetailedTracking()}
+                onClose={() => setIsDetailSetupOpen(false)}
             />
 
             {isExitConfirmOpen && (
