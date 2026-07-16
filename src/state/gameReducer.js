@@ -15,7 +15,7 @@ export const DEFAULT_BLINDS = { sb: 1, bb: 2 };
 export const DEFAULT_SETTINGS = {
     aiProvider: 'gemini', // 'gemini' | 'openai' | 'anthropic'
     geminiApiKey: '', geminiModel: 'gemini-3-pro-preview',
-    openaiApiKey: '', openaiModel: 'gpt-5.1',
+    openaiApiKey: '', openaiModel: 'gpt-5.6-sol',
     anthropicApiKey: '', anthropicModel: 'claude-opus-4-8',
 };
 
@@ -28,6 +28,8 @@ export function normalizeSettings(loadedSettings) {
         settings.geminiModel = loaded.aiModel.trim();
     }
     if (!AI_PROVIDER_IDS.includes(settings.aiProvider)) settings.aiProvider = 'gemini';
+    // 과거 기본값 승격: gpt-5.1은 이 앱이 잠시 쓰던 기본 모델명 — 새 기본(gpt-5.6-sol)으로 올린다
+    if (settings.openaiModel === 'gpt-5.1') settings.openaiModel = DEFAULT_SETTINGS.openaiModel;
     return settings;
 }
 

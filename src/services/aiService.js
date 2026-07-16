@@ -17,7 +17,7 @@ export const AI_PROVIDERS = {
     },
     openai: {
         label: 'ChatGPT (OpenAI)',
-        defaultModel: 'gpt-5.1',
+        defaultModel: 'gpt-5.6-sol', // GPT-5.6 플래그십 티어 (Sol)
         keyPlaceholder: 'sk-...',
         keyField: 'openaiApiKey',
         modelField: 'openaiModel',

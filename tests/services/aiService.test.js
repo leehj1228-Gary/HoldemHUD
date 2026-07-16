@@ -44,13 +44,13 @@ describe('aiService 멀티 프로바이더', () => {
         const fetchMock = mockFetchOnce({
             choices: [{ message: { content: JSON.stringify(VALID_RESULT) } }],
         });
-        const result = await analyzeTable(TABLE, { provider: 'openai', apiKey: 'sk-test', model: 'gpt-5.1' });
+        const result = await analyzeTable(TABLE, { provider: 'openai', apiKey: 'sk-test' });
 
         const [url, init] = fetchMock.mock.calls[0];
         expect(url).toBe('https://api.openai.com/v1/chat/completions');
         expect(init.headers.Authorization).toBe('Bearer sk-test');
         const body = JSON.parse(init.body);
-        expect(body.model).toBe('gpt-5.1');
+        expect(body.model).toBe('gpt-5.6-sol'); // 모델 미지정 → 기본 모델 (GPT-5.6 Sol)
         expect(body.response_format).toEqual({ type: 'json_object' });
         expect(body.messages[0].role).toBe('user');
         expect(result.recommendedRange.AA).toBe('Raise');
@@ -149,5 +149,11 @@ describe('resolveAiOptions / 설정 마이그레이션', () => {
     it('normalizeSettings: 잘못된 aiProvider는 gemini로 교정', () => {
         expect(normalizeSettings({ aiProvider: 'gpt' }).aiProvider).toBe('gemini');
         expect(normalizeSettings({ aiProvider: 'openai' }).aiProvider).toBe('openai');
+    });
+
+    it('normalizeSettings: 구 기본값 gpt-5.1은 새 기본(gpt-5.6-sol)으로 승격, 다른 값은 유지', () => {
+        expect(normalizeSettings({ openaiModel: 'gpt-5.1' }).openaiModel).toBe('gpt-5.6-sol');
+        expect(normalizeSettings({ openaiModel: 'gpt-5.6-terra' }).openaiModel).toBe('gpt-5.6-terra');
+        expect(normalizeSettings({}).openaiModel).toBe('gpt-5.6-sol');
     });
 });
