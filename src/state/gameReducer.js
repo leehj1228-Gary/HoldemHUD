@@ -12,7 +12,26 @@ import {
 } from '../engine/handEngine.js';
 
 export const DEFAULT_BLINDS = { sb: 1, bb: 2 };
-export const DEFAULT_SETTINGS = { geminiApiKey: '', aiModel: 'gemini-3-pro-preview' };
+export const DEFAULT_SETTINGS = {
+    aiProvider: 'gemini', // 'gemini' | 'openai' | 'anthropic'
+    geminiApiKey: '', geminiModel: 'gemini-3-pro-preview',
+    openaiApiKey: '', openaiModel: 'gpt-5.1',
+    anthropicApiKey: '', anthropicModel: 'claude-opus-4-8',
+};
+
+// 저장된 설정 정규화 — 구버전 설정({geminiApiKey, aiModel})을 새 멀티 프로바이더 형태로 옮긴다
+export function normalizeSettings(loadedSettings) {
+    const loaded = (loadedSettings && typeof loadedSettings === 'object') ? loadedSettings : {};
+    const settings = { ...DEFAULT_SETTINGS, ...loaded };
+    // 레거시: aiModel은 Gemini 모델명이었다 — geminiModel이 없을 때만 이식
+    if (!loaded.geminiModel && typeof loaded.aiModel === 'string' && loaded.aiModel.trim()) {
+        settings.geminiModel = loaded.aiModel.trim();
+    }
+    if (!AI_PROVIDER_IDS.includes(settings.aiProvider)) settings.aiProvider = 'gemini';
+    return settings;
+}
+
+const AI_PROVIDER_IDS = ['gemini', 'openai', 'anthropic'];
 
 const MIN_SEATS = 2;
 const MAX_SEATS = 9;
@@ -149,10 +168,7 @@ export function reducer(state, action) {
                 ...state,
                 session,
                 roster: loaded && Array.isArray(loaded.roster) ? loaded.roster : state.roster,
-                settings: {
-                    ...DEFAULT_SETTINGS,
-                    ...(loaded && loaded.settings && typeof loaded.settings === 'object' ? loaded.settings : {}),
-                },
+                settings: normalizeSettings(loaded && loaded.settings),
                 archive,
                 autoNext: { pending: false },
             };

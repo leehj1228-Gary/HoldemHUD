@@ -527,7 +527,13 @@ describe('로스터·설정·아카이브 관리', () => {
     it('UPDATE_SETTINGS는 patch 병합', () => {
         const st = reducer(initialState, { type: 'UPDATE_SETTINGS', patch: { geminiApiKey: 'k1' } });
         expect(st.settings.geminiApiKey).toBe('k1');
-        expect(st.settings.aiModel).toBe('gemini-3-pro-preview');
+        // patch에 없는 필드는 기본값 유지 (멀티 프로바이더 기본값)
+        expect(st.settings.geminiModel).toBe('gemini-3-pro-preview');
+        expect(st.settings.aiProvider).toBe('gemini');
+        const st2 = reducer(st, { type: 'UPDATE_SETTINGS', patch: { aiProvider: 'anthropic', anthropicApiKey: 'sk-ant-1' } });
+        expect(st2.settings.aiProvider).toBe('anthropic');
+        expect(st2.settings.anthropicApiKey).toBe('sk-ant-1');
+        expect(st2.settings.geminiApiKey).toBe('k1');
     });
 
     it('DELETE_ARCHIVED는 id로 제거, 없는 id는 no-op', () => {
@@ -551,7 +557,12 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
         });
         expect(st.session).toBeNull();
         expect(st.roster).toEqual(['Kim']);
-        expect(st.settings).toEqual({ geminiApiKey: 'k', aiModel: 'gemini-3-pro-preview' });
+        // 저장된 키는 유지 + 나머지는 멀티 프로바이더 기본값으로 채움
+        expect(st.settings.geminiApiKey).toBe('k');
+        expect(st.settings.aiProvider).toBe('gemini');
+        expect(st.settings.geminiModel).toBe('gemini-3-pro-preview');
+        expect(st.settings.openaiModel).toBeTruthy();
+        expect(st.settings.anthropicModel).toBeTruthy();
         expect(st.archive).toHaveLength(1);
     });
 

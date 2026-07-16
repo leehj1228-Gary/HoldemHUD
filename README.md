@@ -12,7 +12,7 @@
 - **자동 저장**: 진행 중 세션이 localStorage에 자동 저장 — 앱이 꺼져도 이어하기 가능
 - **세션 히스토리**: 세션별 핸드 리플레이 + 플레이어별 통계
 - **플레이어 프로필**: 세션 통합 통계 + 스타일 분류 (GTO/TAG/LAG/Nit/Station/Maniac)
-- **AI 코치 (Gemini)**: 테이블 분석(169콤보 추천 레인지 차트), 세션 프리플랍 리크 분석
+- **AI 코치 (Gemini / ChatGPT / Claude)**: 테이블 분석(169콤보 추천 레인지 차트), 세션 프리플랍 리크 분석 — 프로바이더 선택 가능
 
 ## 시작하기
 
@@ -31,9 +31,16 @@ npm run lint
 
 ### AI 코치 설정
 
-Gemini API 키는 **앱 안에서** 설정합니다: 홈 화면 → `⚙️ 설정` → API 키 입력.
+AI 프로바이더와 API 키는 **앱 안에서** 설정합니다: 홈 화면 → `⚙️ 설정` → 프로바이더 선택(Gemini / ChatGPT / Claude) → API 키 입력.
 키는 사용 중인 기기의 localStorage에만 저장되며, 코드나 빌드 산출물에 포함되지 않습니다.
-(키 발급: [Google AI Studio](https://aistudio.google.com/apikey))
+
+| 프로바이더 | 기본 모델 | 키 발급 |
+|---|---|---|
+| Gemini | `gemini-3-pro-preview` | [Google AI Studio](https://aistudio.google.com/apikey) |
+| ChatGPT (OpenAI) | `gpt-5.1` | [OpenAI Platform](https://platform.openai.com/api-keys) |
+| Claude (Anthropic) | `claude-opus-4-8` | [Claude Console](https://platform.claude.com/) |
+
+모델명은 설정에서 자유롭게 변경할 수 있습니다 (비워두면 기본 모델 사용).
 
 ### Android (Capacitor)
 

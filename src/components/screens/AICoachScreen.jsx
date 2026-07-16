@@ -4,7 +4,7 @@
 
 import React, { useState } from 'react';
 import { useGame } from '../../state/GameContext.jsx';
-import { analyzeTable } from '../../services/aiService.js';
+import { analyzeTable, resolveAiOptions } from '../../services/aiService.js';
 import CoachSetup from '../coach/CoachSetup.jsx';
 import StrategyResults from '../coach/StrategyResults.jsx';
 import RangeChart from '../coach/RangeChart.jsx';
@@ -23,8 +23,8 @@ const AICoachScreen = () => {
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [analysisResult, setAnalysisResult] = useState(null);
 
-    const ai = { apiKey: settings.geminiApiKey, model: settings.aiModel };
-    const hasApiKey = !!(settings.geminiApiKey && settings.geminiApiKey.trim());
+    const ai = resolveAiOptions(settings);
+    const hasApiKey = !!(ai.apiKey && ai.apiKey.trim());
 
     const runAnalysis = async (tableData) => {
         setIsAnalyzing(true);
@@ -71,7 +71,7 @@ const AICoachScreen = () => {
 
             {!hasApiKey && (
                 <div style={{ background: '#e67e22', color: '#fff', padding: '8px 15px', textAlign: 'center', fontSize: '0.9em', flexShrink: 0 }}>
-                    ⚠️ Gemini API 키가 없습니다. 홈 화면의 '⚙️ 설정'에서 API 키를 입력하세요.
+                    ⚠️ {ai.label} API 키가 없습니다. 홈 화면의 '⚙️ 설정'에서 API 키를 입력하세요.
                 </div>
             )}
 

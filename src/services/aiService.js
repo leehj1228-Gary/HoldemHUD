@@ -1,50 +1,190 @@
-// Gemini AI 코치 서비스 (docs/REBUILD_DESIGN.md §7 — S5)
-// 키/모델은 인자로 주입한다 (settings.geminiApiKey / settings.aiModel — 모듈이 storage 직접 접근 금지).
+// AI 코치 서비스 (docs/REBUILD_DESIGN.md §7 — S5)
+// 멀티 프로바이더: Gemini / OpenAI(ChatGPT) / Anthropic(Claude).
+// 키/모델은 인자로 주입한다 (settings — 모듈이 storage 직접 접근 금지).
+// 브라우저 클라이언트 앱이므로 세 프로바이더 모두 raw fetch로 직접 호출한다 (CORS 지원 확인됨).
 // 프롬프트의 핸드 데이터는 새 스키마 기준: seat은 전부 0-based, 액션은 name/position/raiseLevel 포함.
 
-const DEFAULT_MODEL = 'gemini-3-pro-preview';
 const TIMEOUT_MS = 60000;
 
-function buildUrl(model, apiKey) {
-    const m = (typeof model === 'string' && model.trim()) ? model.trim() : DEFAULT_MODEL;
-    return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+// 프로바이더 메타데이터 — 설정 UI와 옵션 해석이 공유하는 단일 정의
+export const AI_PROVIDERS = {
+    gemini: {
+        label: 'Gemini',
+        defaultModel: 'gemini-3-pro-preview',
+        keyPlaceholder: 'AIza...',
+        keyField: 'geminiApiKey',
+        modelField: 'geminiModel',
+    },
+    openai: {
+        label: 'ChatGPT (OpenAI)',
+        defaultModel: 'gpt-5.1',
+        keyPlaceholder: 'sk-...',
+        keyField: 'openaiApiKey',
+        modelField: 'openaiModel',
+    },
+    anthropic: {
+        label: 'Claude (Anthropic)',
+        defaultModel: 'claude-opus-4-8',
+        keyPlaceholder: 'sk-ant-...',
+        keyField: 'anthropicApiKey',
+        modelField: 'anthropicModel',
+    },
+};
+
+/**
+ * settings에서 현재 선택된 프로바이더의 호출 옵션을 만든다.
+ * @param {object} settings - useGame().settings
+ * @returns {{provider: string, label: string, apiKey: string, model: string}}
+ */
+export function resolveAiOptions(settings = {}) {
+    const provider = AI_PROVIDERS[settings.aiProvider] ? settings.aiProvider : 'gemini';
+    const meta = AI_PROVIDERS[provider];
+    // 레거시 호환: 구 설정(aiModel)은 gemini 모델명으로 취급
+    const legacyModel = provider === 'gemini' ? settings.aiModel : undefined;
+    return {
+        provider,
+        label: meta.label,
+        apiKey: settings[meta.keyField] || '',
+        model: settings[meta.modelField] || legacyModel || meta.defaultModel,
+    };
 }
 
-// 공통 Gemini 호출: JSON 응답 강제 + 응답 구조 가드 + 60초 타임아웃
-async function callGemini(prompt, { apiKey, model } = {}) {
+function requireKey(apiKey, meta) {
     const key = typeof apiKey === 'string' ? apiKey.trim() : '';
-    if (!key) throw new Error('설정에서 Gemini API 키를 입력하세요');
+    if (!key) throw new Error(`설정에서 ${meta.label} API 키를 입력하세요`);
+    return key;
+}
+
+function pickModel(model, meta) {
+    return (typeof model === 'string' && model.trim()) ? model.trim() : meta.defaultModel;
+}
+
+async function readErrorBody(response) {
+    try {
+        const text = await response.text();
+        try {
+            const data = JSON.parse(text);
+            // Gemini/OpenAI: {error:{message}}, Anthropic: {error:{message}}
+            return data?.error?.message || text;
+        } catch { return text; }
+    } catch { return ''; }
+}
+
+// ── 프로바이더별 요청/응답 (요청 body 생성 + 응답에서 텍스트 추출) ─────────────
+
+const PROVIDER_CALLS = {
+    gemini: {
+        request(prompt, key, model) {
+            return {
+                url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
+                headers: { 'Content-Type': 'application/json' },
+                body: {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { responseMimeType: 'application/json' },
+                },
+            };
+        },
+        extractText(data) {
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!text) {
+                const details = [];
+                const finishReason = data.candidates?.[0]?.finishReason;
+                if (finishReason) details.push(`finishReason: ${finishReason}`);
+                if (data.promptFeedback) details.push(`promptFeedback: ${JSON.stringify(data.promptFeedback)}`);
+                throw new Error(`AI 응답에 텍스트가 없습니다${details.length ? ` (${details.join(', ')})` : ''}`);
+            }
+            return text;
+        },
+    },
+    openai: {
+        request(prompt, key, model) {
+            return {
+                url: 'https://api.openai.com/v1/chat/completions',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${key}`,
+                },
+                // 프롬프트가 JSON 출력을 명시하므로 json_object 모드 사용 가능
+                body: {
+                    model,
+                    messages: [{ role: 'user', content: prompt }],
+                    response_format: { type: 'json_object' },
+                },
+            };
+        },
+        extractText(data) {
+            const choice = data.choices?.[0];
+            if (choice?.message?.refusal) {
+                throw new Error(`AI가 요청을 거절했습니다: ${choice.message.refusal}`);
+            }
+            const text = choice?.message?.content;
+            if (!text) {
+                const finish = choice?.finish_reason;
+                throw new Error(`AI 응답에 텍스트가 없습니다${finish ? ` (finish_reason: ${finish})` : ''}`);
+            }
+            return text;
+        },
+    },
+    anthropic: {
+        request(prompt, key, model) {
+            return {
+                url: 'https://api.anthropic.com/v1/messages',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': key,
+                    'anthropic-version': '2023-06-01',
+                    // 브라우저에서 직접 호출하기 위한 CORS 옵트인 (키는 사용자 기기에만 저장됨)
+                    'anthropic-dangerous-direct-browser-access': 'true',
+                },
+                body: {
+                    model,
+                    max_tokens: 16000,
+                    thinking: { type: 'adaptive' },
+                    messages: [{ role: 'user', content: prompt }],
+                },
+            };
+        },
+        extractText(data) {
+            if (data.stop_reason === 'refusal') {
+                const why = data.stop_details?.explanation || data.stop_details?.category || '';
+                throw new Error(`AI가 요청을 거절했습니다${why ? ` (${why})` : ''}`);
+            }
+            const block = Array.isArray(data.content) ? data.content.find(b => b?.type === 'text') : null;
+            if (!block?.text) {
+                throw new Error(`AI 응답에 텍스트가 없습니다${data.stop_reason ? ` (stop_reason: ${data.stop_reason})` : ''}`);
+            }
+            return block.text;
+        },
+    },
+};
+
+// 공통 호출: 프로바이더 디스패치 + JSON 파싱 + 응답 구조 가드 + 60초 타임아웃
+async function callAI(prompt, { provider = 'gemini', apiKey, model } = {}) {
+    const meta = AI_PROVIDERS[provider] || AI_PROVIDERS.gemini;
+    const impl = PROVIDER_CALLS[provider] || PROVIDER_CALLS.gemini;
+    const key = requireKey(apiKey, meta);
+    const m = pickModel(model, meta);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-        const response = await fetch(buildUrl(model, key), {
+        const { url, headers, body } = impl.request(prompt, key, m);
+        const response = await fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { responseMimeType: 'application/json' },
-            }),
+            headers,
+            body: JSON.stringify(body),
             signal: controller.signal,
         });
 
         if (!response.ok) {
-            let errorText = '';
-            try { errorText = await response.text(); } catch { /* 본문 없음 — 무시 */ }
-            throw new Error(`API Error: ${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ''}`);
+            const detail = await readErrorBody(response);
+            throw new Error(`API Error: ${response.status} ${response.statusText}${detail ? ` - ${detail}` : ''}`);
         }
 
         const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) {
-            const details = [];
-            const finishReason = data.candidates?.[0]?.finishReason;
-            if (finishReason) details.push(`finishReason: ${finishReason}`);
-            if (data.promptFeedback) details.push(`promptFeedback: ${JSON.stringify(data.promptFeedback)}`);
-            throw new Error(`AI 응답에 텍스트가 없습니다${details.length ? ` (${details.join(', ')})` : ''}`);
-        }
+        const text = impl.extractText(data);
 
-        // responseMimeType을 지정해도 방어적으로 마크다운 펜스 제거.
+        // JSON 모드를 지정해도 방어적으로 마크다운 펜스 제거.
         // 선두/말미 펜스만 벗긴다 — 전역 치환은 JSON 문자열 값 안의 백틱까지 파괴하므로 금지.
         let jsonString = text.trim();
         if (jsonString.startsWith('```')) {
@@ -58,7 +198,7 @@ async function callGemini(prompt, { apiKey, model } = {}) {
         if (error && error.name === 'AbortError') {
             throw new Error('AI 요청이 60초를 초과했습니다. 잠시 후 다시 시도하세요.');
         }
-        console.error('Gemini API Call Failed:', error);
+        console.error(`${meta.label} API Call Failed:`, error);
         throw error;
     } finally {
         clearTimeout(timer);
@@ -70,7 +210,7 @@ async function callGemini(prompt, { apiKey, model } = {}) {
  * @param {object} tableData - { blinds:{sb,bb}|null, currency, straddleCount,
  *   players:[{seat(0-based), position, name, stackBB, isHero, stats:{vpip,pfr}|null, style, action}],
  *   heroPosition }
- * @param {{apiKey: string, model?: string}} options - 설정에서 주입되는 키/모델
+ * @param {{provider?: string, apiKey: string, model?: string}} options - 설정에서 주입되는 프로바이더/키/모델
  * @returns {Promise<object>} { recommendedRange, rangeSummary|null, strategySummary, playerTips }
  */
 export async function analyzeTable(tableData, options) {
@@ -122,7 +262,7 @@ export async function analyzeTable(tableData, options) {
     4. ** Response:** Return ONLY the valid JSON string. Do not include markdown formatting like \`\`\`json.
     `;
 
-    const raw = await callGemini(prompt, options);
+    const raw = await callAI(prompt, options);
     // 응답 형태 검증/보정 — UI(StrategyResults/RangeChart)가 malformed 응답으로 크래시하지 않도록
     const result = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
     const recommendedRange = (result.recommendedRange && typeof result.recommendedRange === 'object'
@@ -196,7 +336,7 @@ function compactHand(hand) {
  * @param {string} args.heroName - 히어로 이름
  * @param {Array<object>} [args.opponentStats] - statsEngine 퍼센트 기반:
  *   [{ name, hands(=dealt 표본), vpip, pfr, threeBet, ft3b, fts }] — 각 % 는 정수 또는 null
- * @param {{apiKey: string, model?: string}} options - 설정에서 주입되는 키/모델
+ * @param {{provider?: string, apiKey: string, model?: string}} options - 설정에서 주입되는 프로바이더/키/모델
  * @returns {Promise<object>} { majorLeaks, goodPlays, overallScore, summary }
  */
 export async function analyzeSessionLeaks({ hands, heroName, opponentStats = [] }, options) {
@@ -311,7 +451,7 @@ export async function analyzeSessionLeaks({ hands, heroName, opponentStats = [] 
     - Return ONLY a single valid JSON object.
     `;
 
-    const raw = await callGemini(prompt, options);
+    const raw = await callAI(prompt, options);
     // 응답 형태 검증/보정 — SessionLeaks.jsx가 malformed 응답으로 크래시하지 않도록
     const result = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
     const score = Number(result.overallScore);
