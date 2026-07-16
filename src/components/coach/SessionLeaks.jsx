@@ -1,11 +1,13 @@
 // 세션 리크 파인더 (설계 §7 — S5)
 // 분석 대상 = 아카이브 + 현재 세션 핸드. 히어로는 실제 핸드에 등장하는 이름 목록에서 선택(가공의 'Hero' 기본값 금지).
 // evidenceHands는 handNo 정수 배열로 받아 실제 분석 핸드 목록에서 조회한다 (정규식 텍스트 파싱 폐지).
+// 외부 전송은 가명 ID로만 나가고(aiService), 응답 텍스트는 표시 전에 로컬에서 실명으로 re-join한다.
 
 import React, { useMemo, useState } from 'react';
 import { useGame } from '../../state/GameContext.jsx';
 import { computeAllStats } from '../../engine/statsEngine.js';
 import { analyzeSessionLeaks, selectHeroHands } from '../../services/aiService.js';
+import { rejoinDisplayNames } from '../../analysis/pseudonyms.js';
 
 function activeNamesOf(hand) {
     const names = [];
@@ -34,6 +36,43 @@ function actionLabel(action) {
     const type = action.type ? action.type.charAt(0).toUpperCase() + action.type.slice(1) : '?';
     if (action.type === 'raise' && action.raiseLevel >= 1) return `${type} (${action.raiseLevel + 1}-Bet)`;
     return type;
+}
+
+// LLM 응답의 가명 ID('player:xxxxxxxx')를 표시용 텍스트 필드마다 실명으로 되돌린다.
+// 표시 전에 한 번만 변환해 저장하므로 렌더 코드는 실명이 채워진 결과만 다룬다.
+function rejoinLeakResult(result, invertedMap) {
+    const rejoin = (text) => rejoinDisplayNames(text, invertedMap);
+    return {
+        ...result,
+        summary: rejoin(result.summary),
+        majorLeaks: (result.majorLeaks || []).map(leak => (
+            leak && typeof leak === 'object'
+                ? {
+                    ...leak,
+                    title: rejoin(leak.title),
+                    description: rejoin(leak.description),
+                    fix: rejoin(leak.fix),
+                    opponentAdjustments: Array.isArray(leak.opponentAdjustments)
+                        ? leak.opponentAdjustments.map(adj => (
+                            adj && typeof adj === 'object'
+                                ? {
+                                    ...adj,
+                                    vsPlayer: rejoin(adj.vsPlayer),
+                                    advice: rejoin(adj.advice),
+                                    statSampleNote: rejoin(adj.statSampleNote),
+                                }
+                                : adj
+                        ))
+                        : leak.opponentAdjustments,
+                }
+                : leak
+        )),
+        goodPlays: (result.goodPlays || []).map(play => {
+            if (typeof play === 'string') return rejoin(play);
+            if (play && typeof play === 'object') return { ...play, text: rejoin(play.text) };
+            return play;
+        }),
+    };
 }
 
 const SessionLeaks = ({ ai }) => {
@@ -118,27 +157,20 @@ const SessionLeaks = ({ ai }) => {
             return;
         }
 
-        // 상대 스탯은 statsEngine의 퍼센트 값으로 (hands = dealt 표본 크기)
+        // 상대 스탯은 statsEngine PlayerStats 원본을 그대로 전달 — 서비스가 {num, den, pct}로 축약·가명화한다
         const stats = computeAllStats(prepared);
         const opponentStats = [];
         for (const [name, st] of stats) {
             if (name === effectiveHero) continue;
-            opponentStats.push({
-                name,
-                hands: st.dealt,
-                vpip: st.vpip.pct,
-                pfr: st.pfr.pct,
-                threeBet: st.threeBet.pct,
-                ft3b: st.ft3b.pct,
-                fts: st.fts.pct,
-            });
+            opponentStats.push({ name, stats: st });
         }
 
         setIsAnalyzing(true);
         try {
-            const analysis = await analyzeSessionLeaks(
+            const { result: analysis, pseudonyms } = await analyzeSessionLeaks(
                 { hands: prepared, heroName: effectiveHero, opponentStats }, ai);
-            setResult(analysis);
+            // 가명 ID → 실명 re-join은 로컬에서만 (외부로는 실명이 나가지 않는다)
+            setResult(rejoinLeakResult(analysis, new Map(Object.entries(pseudonyms || {}))));
             setAnalyzedHands(prepared);
             setAnalyzedHero(effectiveHero);
         } catch (error) {
@@ -267,6 +299,16 @@ const SessionLeaks = ({ ai }) => {
                                 <span style={{ color: '#2ecc71', fontWeight: 'bold' }}>✅ Fix:</span>
                                 <p style={{ margin: '5px 0 0 0', fontSize: '0.95em' }}>{leak.fix}</p>
                             </div>
+                            {Array.isArray(leak.opponentAdjustments) && leak.opponentAdjustments.map((adj, aIdx) => (
+                                adj && typeof adj === 'object' ? (
+                                    <div key={aIdx} style={{ background: 'rgba(241, 196, 15, 0.08)', padding: '8px 10px', borderRadius: '5px', borderLeft: '3px solid #f1c40f', marginTop: '8px', fontSize: '0.9em' }}>
+                                        <span style={{ color: '#f1c40f', fontWeight: 'bold' }}>🎯 vs {adj.vsPlayer}</span>
+                                        {adj.basedOnStat ? <span style={{ color: '#95a5a6', marginLeft: '6px' }}>({adj.basedOnStat})</span> : null}
+                                        <p style={{ margin: '5px 0 0 0' }}>{adj.advice}</p>
+                                        {adj.statSampleNote ? <p style={{ margin: '4px 0 0 0', color: '#95a5a6', fontSize: '0.85em' }}>{adj.statSampleNote}</p> : null}
+                                    </div>
+                                ) : null
+                            ))}
                             {renderHandChips(leak.evidenceHands)}
                         </div>
                     ))}

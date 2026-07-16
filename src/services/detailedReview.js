@@ -10,10 +10,14 @@ import {
     normalizeCard as canonicalCard,
 } from '../engine/schema.js';
 
-const PAYLOAD_SCHEMA_VERSION = 'detailed-review-payload.v1';
+// Exported for src/analysis/adapters/heuristicLlmAdapter.js — the adapter's
+// promptVersion(캐시 키 구성 요소)은 이 payload 계약 버전을 재선언 없이 재사용한다.
+export const PAYLOAD_SCHEMA_VERSION = 'detailed-review-payload.v1';
 const REVIEW_SCHEMA_VERSION = 'heuristic-decision-review.v1';
 const ANALYSIS_MODE = 'heuristic_no_solver';
-const CONFIDENCE_CAP = 0.45;
+// Exported for src/analysis/validation/validateModeClaims.js — the analysis layer
+// reuses (never re-declares) the exact heuristic_no_solver claim limits.
+export const CONFIDENCE_CAP = 0.45;
 
 const STREET_BOARD_COUNTS = { preflop: 0, flop: 3, turn: 4, river: 5 };
 const STREET_ALLOWED_VISIBLE_COUNTS = {
@@ -25,7 +29,9 @@ const STREET_ALLOWED_VISIBLE_COUNTS = {
 const LEGAL_ACTIONS = [...RECORDED_ACTIONS, 'all-in'];
 const ASSESSMENTS = ['plausible', 'review_needed', 'not_gradable'];
 const HANGUL_PATTERN = /[가-힣]/;
-const FORBIDDEN_PROSE_PATTERN = /\b(?:gto|equity|ev|ev\s*loss|expected\s+value|solver)\b|에쿼티|기대값|솔버|지티오|명백한\s*실수|정답|오답|최적(?:이다|입니다|임)?/i;
+// Exported for src/analysis/validation/validateModeClaims.js (single source of the
+// heuristic_no_solver forbidden-claim vocabulary).
+export const FORBIDDEN_PROSE_PATTERN = /\b(?:gto|equity|ev|ev\s*loss|expected\s+value|solver)\b|에쿼티|기대값|솔버|지티오|명백한\s*실수|정답|오답|최적(?:이다|입니다|임)?/i;
 const STATIC_FACT_REFS = new Set([
     'game.variant', 'game.format', 'game.smallBlind', 'game.bigBlind',
     'game.straddleCount',
@@ -465,7 +471,13 @@ function recordedActionFromHand(action, path) {
     };
 }
 
-function prefixHandForDecision(hand, decisionSeq, street) {
+/**
+ * Knowledge-cutoff prefix: copy of the hand containing only what was visible
+ * strictly before `decisionSeq` on `street`. This is the single implementation of
+ * the cutoff algorithm — src/analysis/snapshot/buildDecisionSnapshot.js reuses it
+ * instead of duplicating the future-information removal rules.
+ */
+export function prefixHandForDecision(hand, decisionSeq, street) {
     const board = boardThroughStreet(hand.detailed.board, street);
     const actions = hand.actions
         .filter(action => Number.isInteger(action?.seq) && action.seq < decisionSeq)

@@ -292,3 +292,55 @@ export function computeStats(hands, playerName) {
     const all = computeAllStats(hands);
     return all.get(name) || finalizeStats(newPlayerStats());
 }
+
+// ─── 시점 고정(as-of) 통계 — 과거 결정을 분석할 때 미래 핸드가 상대 모델에 새지 않게 한다 ───
+
+const RECENT_WINDOW_RE = /^recent_(\d+)$/;
+
+/**
+ * beforeHandId 핸드 "직전"까지의 통계를 윈도우별로 계산한다 (연구 기준서 §12.1 시간축 계약).
+ * hands는 시간순 배열이어야 하며, id === beforeHandId 인 핸드 자신과 그 이후 핸드는 모두 제외된다.
+ * 통계 정의는 computeAllStats 단일 구현을 윈도우마다 그대로 재사용한다 (설계 §4 — 새 정의·증분 카운터 금지).
+ *
+ * 윈도우 이름:
+ * - 'lifetime' — 잘라낸 슬라이스 전체 (기준 핸드 이전 전부)
+ * - 'session'  — 호출자가 세션 핸드만 전달한다는 계약. 구현은 주어진 슬라이스 전체를
+ *                그대로 사용한다 (범위 선택은 호출자 책임 — lifetime과 같은 계산).
+ * - 'recent_N' — 슬라이스의 마지막 N개 (예: 'recent_50' = 직전 50핸드)
+ * 모르는 윈도우 이름은 조용히 건너뛴다 (결과 windows에 키가 없음 — forward-compat).
+ *
+ * @param {Array<object>} hands - 시간순 HandRecord 배열
+ * @param {{beforeHandId?: string, windows?: string[]}} [opts]
+ *   beforeHandId 미지정 → 전체 사용. 지정했지만 목록에 없으면 방어적으로 전체를 사용하고
+ *   truncated: false 로 표시한다 (호출자가 시간축 보장 실패를 감지할 수 있도록).
+ * @returns {{asOfHandId: string|null, truncated: boolean, windows: Object<string, Map<string, object>>}}
+ *   asOfHandId: 실제로 잘라낸 기준 핸드 id (자르지 않았으면 null),
+ *   windows: 윈도우 이름 → computeAllStats와 동일한 Map<trimmedName, PlayerStats>
+ */
+export function computeStatsAsOf(hands, { beforeHandId, windows = ['lifetime'] } = {}) {
+    const list = Array.isArray(hands) ? hands : [];
+    let slice = list;
+    let truncated = false;
+    if (typeof beforeHandId === 'string' && beforeHandId) {
+        const idx = list.findIndex(h => h && h.id === beforeHandId);
+        if (idx !== -1) {
+            slice = list.slice(0, idx); // strictly before — 기준 핸드 자신도 제외
+            truncated = true;
+        }
+    }
+
+    const out = {};
+    for (const w of Array.isArray(windows) ? windows : []) {
+        if (typeof w !== 'string' || out[w]) continue; // 중복 윈도우는 1회만 계산
+        if (w === 'lifetime' || w === 'session') {
+            out[w] = computeAllStats(slice);
+            continue;
+        }
+        const m = RECENT_WINDOW_RE.exec(w);
+        if (m) {
+            const n = Number(m[1]);
+            out[w] = computeAllStats(n > 0 ? slice.slice(-n) : []);
+        }
+    }
+    return { asOfHandId: truncated ? beforeHandId : null, truncated, windows: out };
+}

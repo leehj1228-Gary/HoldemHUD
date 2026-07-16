@@ -10,6 +10,7 @@ import {
     validateDecisionReview,
 } from './detailedReview.js';
 import { DETAILED_ACTION_TYPES } from '../engine/schema.js';
+import { buildPseudonymMap, invertPseudonymMap, pseudonymFor } from '../analysis/pseudonyms.js';
 
 const TIMEOUT_MS = 60000;
 
@@ -166,7 +167,9 @@ const PROVIDER_CALLS = {
 };
 
 // 공통 호출: 프로바이더 디스패치 + JSON 파싱 + 응답 구조 가드 + 60초 타임아웃
-async function callAI(prompt, { provider = 'gemini', apiKey, model } = {}) {
+// Exported for src/analysis/adapters/heuristicLlmAdapter.js — 분석 게이트웨이 경로도
+// 프로바이더 호출 구현을 재선언하지 않고 이 단일 함수를 재사용한다.
+export async function callAI(prompt, { provider = 'gemini', apiKey, model } = {}) {
     const meta = AI_PROVIDERS[provider] || AI_PROVIDERS.gemini;
     const impl = PROVIDER_CALLS[provider] || PROVIDER_CALLS.gemini;
     const key = requireKey(apiKey, meta);
@@ -465,20 +468,21 @@ export function selectHeroHands(hands, heroName, limit = 50) {
 }
 
 // 토큰 절약을 위한 핸드 축약 (새 스키마 필드만 — 0-based seat 일관)
-function compactHand(hand) {
+// idFor: 표시 이름 → 가명 ID ('player:xxxxxxxx'). 외부 전송 payload에 실명을 절대 싣지 않는다.
+function compactHand(hand, idFor) {
     return {
         handNo: hand.handNo,
         dealerSeat: hand.dealerSeat,
         straddleCount: hand.straddleCount || 0,
         seats: (hand.seats || [])
             .filter(s => s && !s.sittingOut)
-            .map(s => ({ seat: s.seat, name: s.name, position: s.position ?? null })),
+            .map(s => ({ seat: s.seat, name: idFor(s.name), position: s.position ?? null })),
         actions: (hand.actions || [])
             .filter(a => !a.street || String(a.street).toLowerCase() === 'preflop')
             .map(a => ({
                 seq: a.seq,
                 seat: a.seat,
-                name: a.name,
+                name: idFor(a.name),
                 position: a.position ?? null,
                 type: a.type,
                 raiseLevel: a.raiseLevel || 0,
@@ -486,15 +490,51 @@ function compactHand(hand) {
     };
 }
 
+// 분석 대상 핸드들(seats[].name + actions[].name)에서 가명화 대상 이름을 전부 수집한다
+function collectHandNames(hands) {
+    const names = [];
+    for (const hand of hands) {
+        if (!hand) continue;
+        if (Array.isArray(hand.seats)) {
+            for (const s of hand.seats) if (s && typeof s.name === 'string') names.push(s.name);
+        }
+        if (Array.isArray(hand.actions)) {
+            for (const a of hand.actions) if (a && typeof a.name === 'string') names.push(a.name);
+        }
+    }
+    return names;
+}
+
+// PlayerStats의 {num, den, pct}만 남긴 방어적 사본 (프롬프트 전송용 — exact 표본을 함께 전달)
+function compactRatio(ratio) {
+    return {
+        num: Number.isFinite(ratio?.num) ? ratio.num : 0,
+        den: Number.isFinite(ratio?.den) ? ratio.den : 0,
+        pct: Number.isFinite(ratio?.pct) ? ratio.pct : null,
+    };
+}
+
+const SESSION_LEAK_STAT_KEYS = ['vpip', 'pfr', 'threeBet', 'ft3b', 'fts'];
+
 /**
  * 세션 핸드에서 히어로의 프리플랍 리크를 분석한다.
+ *
+ * 가명화 계약 (연구 기준서 §12.4 항목 5–6): 전송 전에 모든 실명(히어로 + 좌석/액션 이름 +
+ * 상대 스탯 이름)을 'player:xxxxxxxx' 가명 ID로 치환하고, 가명 맵은 함수 안에서 만들어
+ * 반환값의 pseudonyms로 돌려준다 — 호출자가 응답 텍스트를 로컬에서 실명으로 re-join한다.
+ * (프리빌트 맵 파라미터 대신 이 방식을 택했다: 이름 수집·치환 규칙이 전송 payload를 만드는
+ * 이 함수의 책임이고, 호출자는 반환된 맵만 있으면 되기 때문.)
+ *
  * @param {object} args
  * @param {Array<object>} args.hands - selectHeroHands()로 준비된 분석 대상 핸드 (handNo 1..N)
- * @param {string} args.heroName - 히어로 이름
- * @param {Array<object>} [args.opponentStats] - statsEngine 퍼센트 기반:
- *   [{ name, hands(=dealt 표본), vpip, pfr, threeBet, ft3b, fts }] — 각 % 는 정수 또는 null
+ * @param {string} args.heroName - 히어로 실명 (프롬프트에는 가명 ID로만 등장)
+ * @param {Array<object>} [args.opponentStats] - [{ name, stats: PlayerStats }] —
+ *   stats는 statsEngine PlayerStats 원본(각 스탯 {num, den, pct}). 프롬프트에는
+ *   { playerId, hands(=dealt 표본), vpip/pfr/threeBet/ft3b/fts: {num, den, pct} }로 축약 전송.
  * @param {{provider?: string, apiKey: string, model?: string}} options - 설정에서 주입되는 프로바이더/키/모델
- * @returns {Promise<object>} { majorLeaks, goodPlays, overallScore, summary }
+ * @returns {Promise<{result: object, pseudonyms: Object<string, string>}>}
+ *   result: { majorLeaks, goodPlays, overallScore, summary } (텍스트에는 가명 ID가 남아 있음),
+ *   pseudonyms: 'player:xxxxxxxx' → 실명 평문 객체 (rejoinDisplayNames용)
  */
 export async function analyzeSessionLeaks({ hands, heroName, opponentStats = [] }, options) {
     const hero = typeof heroName === 'string' ? heroName.trim() : '';
@@ -502,7 +542,29 @@ export async function analyzeSessionLeaks({ hands, heroName, opponentStats = [] 
     const analyzedHands = Array.isArray(hands) ? hands : [];
     if (analyzedHands.length === 0) throw new Error('선택한 세션에 해당 히어로의 핸드가 없습니다');
 
-    const compactHands = analyzedHands.map(compactHand);
+    // 가명 맵: 히어로 + 핸드에 등장하는 모든 이름 + 상대 스탯 이름 (전송 전 실명 제거)
+    const statEntries = Array.isArray(opponentStats) ? opponentStats : [];
+    const pseudonymMap = buildPseudonymMap([
+        hero,
+        ...collectHandNames(analyzedHands),
+        ...statEntries.map(entry => entry?.name),
+    ].filter(name => typeof name === 'string'));
+    const idFor = (name) => {
+        const trimmed = typeof name === 'string' ? name.trim() : '';
+        return pseudonymMap.get(trimmed) ?? pseudonymFor(trimmed);
+    };
+
+    const compactHands = analyzedHands.map(hand => compactHand(hand, idFor));
+    const promptOpponentStats = statEntries
+        .filter(entry => entry && typeof entry.name === 'string' && entry.stats && typeof entry.stats === 'object')
+        .map(entry => {
+            const row = {
+                playerId: idFor(entry.name),
+                hands: Number.isFinite(entry.stats.dealt) ? entry.stats.dealt : 0,
+            };
+            for (const key of SESSION_LEAK_STAT_KEYS) row[key] = compactRatio(entry.stats[key]);
+            return row;
+        });
 
     const prompt = `
     You are an elite Poker Coach specializing in PRE-FLOP leak finding and GTO/Exploitative adjustments.
@@ -513,15 +575,23 @@ export async function analyzeSessionLeaks({ hands, heroName, opponentStats = [] 
     - DO NOT invent specific cards, exact sizes, or postflop lines.
     - Focus ONLY on frequency-based and decision-structure leaks inferable from the preflop sequence.
 
-    Hero name: "${hero}"
+    PLAYER IDENTITY RULES (critical):
+    - Players are identified ONLY by pseudonymous ids of the form "player:xxxxxxxx"
+      (every "name" in seats/actions and every "playerId" in opponent stats).
+    - Reference players ONLY by these exact ids in ALL output text (including "vsPlayer").
+    - NEVER invent, guess, or shorten player names.
 
-    Opponent Statistics (context — all values are percentages computed from tracked hands):
-    ${JSON.stringify(opponentStats, null, 2)}
+    Hero id: "${idFor(hero)}"
+
+    Opponent Statistics (context — exact counts computed from tracked hands):
+    ${JSON.stringify(promptOpponentStats, null, 2)}
     Rules for stats:
     - "hands" is the sample size (number of hands the player was dealt in).
-    - "vpip", "pfr", "threeBet", "ft3b", "fts" are integer percentages, or null when there was no opportunity sample.
-    - If hands < 50, treat as LOW confidence and explicitly mention it in analysis.
-    - If a stat is null, do NOT use it for exploit advice.
+    - "vpip", "pfr", "threeBet", "ft3b", "fts" are objects { "num", "den", "pct" }:
+      "num" = times the player took the action, "den" = opportunities, "pct" = rounded percent (null when den is 0).
+    - Judge sample confidence by "den": if den < 50 for "vpip"/"pfr" or den < 10 for the others,
+      treat that stat as LOW confidence and explicitly mention it in analysis.
+    - If "pct" is null (den is 0), do NOT use that stat for exploit advice.
 
     Session Hands (each object is one hand):
     ${JSON.stringify(compactHands, null, 2)}
@@ -594,6 +664,7 @@ export async function analyzeSessionLeaks({ hands, heroName, opponentStats = [] 
     - "evidenceHands" MUST be an array of integers, each being the "handNo" value of a hand in the provided data.
     - "goodPlays" entries MUST be objects with "handNo" (integer from the data, or null if not tied to one hand) and "text" (Korean).
     - NEVER reference hands inside free text (no "Hand #3" / "handId=3" strings) — use the handNo fields only.
+    - "vsPlayer" MUST be exactly one of the "playerId" values from the opponent statistics.
 
     SCORING RUBRIC (for consistency):
     - Start from 85.
@@ -613,10 +684,14 @@ export async function analyzeSessionLeaks({ hands, heroName, opponentStats = [] 
     const result = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
     const score = Number(result.overallScore);
     return {
-        ...result,
-        majorLeaks: Array.isArray(result.majorLeaks) ? result.majorLeaks : [],
-        goodPlays: Array.isArray(result.goodPlays) ? result.goodPlays : [],
-        overallScore: Number.isFinite(score) ? score : 0,
-        summary: typeof result.summary === 'string' ? result.summary : '',
+        result: {
+            ...result,
+            majorLeaks: Array.isArray(result.majorLeaks) ? result.majorLeaks : [],
+            goodPlays: Array.isArray(result.goodPlays) ? result.goodPlays : [],
+            overallScore: Number.isFinite(score) ? score : 0,
+            summary: typeof result.summary === 'string' ? result.summary : '',
+        },
+        // 'player:xxxxxxxx' → 실명. 호출자가 표시 직전에 rejoinDisplayNames로 되돌린다.
+        pseudonyms: Object.fromEntries(invertPseudonymMap(pseudonymMap)),
     };
 }

@@ -1,6 +1,6 @@
 // statsEngine 골든 케이스 테스트 (docs/REBUILD_DESIGN.md §4 표의 모든 행 커버)
 import { describe, it, expect } from 'vitest';
-import { computeAllStats, computeStats, formatPct } from '../../src/engine/statsEngine.js';
+import { computeAllStats, computeStats, computeStatsAsOf, formatPct } from '../../src/engine/statsEngine.js';
 
 let handCounter = 0;
 
@@ -493,6 +493,81 @@ describe('HandRecord v2 postflop compatibility', () => {
         draft.status = 'complete';
         draft.detailed.completed = true;
         expect(computeAllStats([draft]).get('P3').dealt).toBe(1);
+    });
+});
+
+describe('computeStatsAsOf (시점 고정 통계 — 미래 핸드 누출 방지)', () => {
+    // P5(CO)가 레이즈하는 핸드 / 전원 폴드 핸드 두 종류로 시간축을 구분한다
+    const raiseHand = () => buildHand({
+        seats: seats6(),
+        actions: [[3, 'fold'], [4, 'fold'], [5, 'raise'], [0, 'fold'], [1, 'fold'], [2, 'fold']],
+    });
+    const foldHand = () => buildHand({
+        seats: seats6(),
+        actions: [[3, 'fold'], [4, 'fold'], [5, 'fold'], [0, 'fold'], [1, 'fold'], [2, 'fold']],
+    });
+
+    it('beforeHandId 핸드 자신과 그 이후는 제외된다 (strictly before)', () => {
+        const h1 = raiseHand();
+        const h2 = raiseHand();
+        const h3 = raiseHand();
+        const { asOfHandId, truncated, windows } = computeStatsAsOf([h1, h2, h3], { beforeHandId: h2.id });
+        expect(truncated).toBe(true);
+        expect(asOfHandId).toBe(h2.id);
+        // h1만 표본 — h2(기준 핸드)와 h3(미래)는 불포함
+        expect(windows.lifetime.get('P5').dealt).toBe(1);
+        expect(ratio(windows.lifetime.get('P5').pfr)).toEqual({ num: 1, den: 1, pct: 100 });
+        // 단일 구현 재사용: computeAllStats(사전 슬라이스)와 동일해야 한다
+        expect(windows.lifetime).toEqual(computeAllStats([h1]));
+    });
+
+    it('첫 핸드를 기준으로 하면 빈 표본', () => {
+        const h1 = raiseHand();
+        const h2 = raiseHand();
+        const { truncated, windows } = computeStatsAsOf([h1, h2], { beforeHandId: h1.id });
+        expect(truncated).toBe(true);
+        expect(windows.lifetime.size).toBe(0);
+    });
+
+    it('recent_50: 기준 이전 핸드 중 마지막 50개만 사용한다', () => {
+        // 앞 5핸드는 P5 레이즈, 뒤 50핸드는 전원 폴드 → recent_50에는 레이즈 핸드가 없어야 한다
+        const early = Array.from({ length: 5 }, raiseHand);
+        const late = Array.from({ length: 50 }, foldHand);
+        const target = raiseHand();
+        const { windows } = computeStatsAsOf([...early, ...late, target], {
+            beforeHandId: target.id,
+            windows: ['lifetime', 'recent_50'],
+        });
+        expect(windows.lifetime.get('P5').dealt).toBe(55);
+        expect(ratio(windows.lifetime.get('P5').pfr)).toEqual({ num: 5, den: 55, pct: 9 });
+        expect(windows.recent_50.get('P5').dealt).toBe(50);
+        expect(ratio(windows.recent_50.get('P5').pfr)).toEqual({ num: 0, den: 50, pct: 0 });
+    });
+
+    it('모르는 beforeHandId는 방어적으로 전체 사용 + truncated:false', () => {
+        const h1 = raiseHand();
+        const h2 = raiseHand();
+        const { asOfHandId, truncated, windows } = computeStatsAsOf([h1, h2], { beforeHandId: 'hand_없는_id' });
+        expect(truncated).toBe(false);
+        expect(asOfHandId).toBe(null);
+        expect(windows.lifetime.get('P5').dealt).toBe(2);
+    });
+
+    it('beforeHandId 미지정 → 전체 사용, session 윈도우는 주어진 슬라이스 전체와 동일', () => {
+        const h1 = raiseHand();
+        const h2 = foldHand();
+        const { truncated, windows } = computeStatsAsOf([h1, h2], { windows: ['session', 'lifetime'] });
+        expect(truncated).toBe(false);
+        expect(windows.session).toEqual(computeAllStats([h1, h2]));
+        expect(windows.session).toEqual(windows.lifetime);
+    });
+
+    it('모르는 윈도우 이름은 결과에서 빠지고, 기본 윈도우는 lifetime', () => {
+        const h1 = raiseHand();
+        const def = computeStatsAsOf([h1]);
+        expect(Object.keys(def.windows)).toEqual(['lifetime']);
+        const { windows } = computeStatsAsOf([h1], { windows: ['lifetime', 'weird_window'] });
+        expect(Object.keys(windows)).toEqual(['lifetime']);
     });
 });
 

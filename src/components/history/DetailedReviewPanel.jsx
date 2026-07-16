@@ -1,7 +1,15 @@
 import { useState } from 'react';
-import { analyzeDetailedHand, resolveAiOptions } from '../../services/aiService.js';
+import { resolveAiOptions } from '../../services/aiService.js';
+import { analyzeDecision } from '../../analysis/gateway/analysisGateway.js';
+import { ANALYSIS_RESULT_SCHEMA_VERSION } from '../../analysis/contracts/analysisResult.js';
+import { ANALYSIS_ERROR_SCHEMA_VERSION } from '../../analysis/contracts/analysisError.js';
+import { computeStatsAsOf } from '../../engine/statsEngine.js';
+import { DETAILED_ACTION_TYPES } from '../../engine/schema.js';
+import { useGame } from '../../state/GameContext.jsx';
 
 const CONFIDENCE_CAP = 0.45;
+const MAX_DECISIONS = 30;
+const MAX_CONCURRENCY = 2;
 const ASSESSMENTS = {
     plausible: {
         label: '휴리스틱상 가능',
@@ -36,6 +44,8 @@ const ACTION_LABELS = {
     raise: 'Raise',
     'all-in': 'All-in',
 };
+// 액션 어휘는 schema.js 단일 선언에서 파생 (재선언 금지)
+const DETAILED_ACTION_TYPE_SET = new Set(DETAILED_ACTION_TYPES);
 
 function safeArray(value) {
     return Array.isArray(value) ? value : [];
@@ -50,42 +60,110 @@ function assessmentMeta(value) {
 }
 
 function normalizedConfidence(confidence) {
-    const raw = typeof confidence === 'object' && confidence !== null
-        ? Number(confidence.value)
-        : Number(confidence);
+    const raw = Number(confidence);
     if (!Number.isFinite(raw) || raw < 0) return 0;
     const ratio = raw > 1 ? raw / 100 : raw;
     return Math.min(ratio, CONFIDENCE_CAP);
 }
 
-function actionFromHand(review, hand) {
-    const decisionId = stringValue(review?.decisionId);
-    const sequenceMatch = decisionId.match(/:a(\d+)$/);
-    if (!sequenceMatch) return null;
-    const sequence = Number(sequenceMatch[1]);
-    const action = safeArray(hand?.actions).find(candidate => candidate?.seq === sequence);
-    return action?.isAllIn ? 'all-in' : (action?.type || null);
+function heroActionAt(hand, decisionSeq) {
+    return safeArray(hand?.actions).find(candidate => candidate?.seq === decisionSeq) || null;
 }
 
-function reviewAction(review, hand) {
-    const raw = actionFromHand(review, hand) ?? review?.decision?.actualAction?.type;
+function actionLabelFor(hand, decisionSeq) {
+    const action = heroActionAt(hand, decisionSeq);
+    const raw = action?.isAllIn ? 'all-in' : action?.type;
     return ACTION_LABELS[raw] || stringValue(raw, '액션 미상');
 }
 
-// analyzeDetailedHand가 반환하는 유일한 검증 통과 형태({items:[{decision, review}]})만
-// 렌더한다. 대체 형태 폴백은 validateDecisionReview를 우회한 미검증 리뷰를 그대로
-// 화면에 올리는 통로가 되므로 금지 — 레거시 형태가 생기면 패널이 아니라 서비스에서
-// 정규화한다. (테스트용 export)
+function streetLabelFor(card, hand, decisionSeq) {
+    const street = stringValue(card?.street) || stringValue(heroActionAt(hand, decisionSeq)?.street, 'preflop');
+    return STREET_LABELS[street.toLowerCase()] || stringValue(street, 'Street 미상');
+}
+
+// 분석 대상 Hero 결정 seq 목록 (aiService.analyzeDetailedHand와 같은 선별 규칙). (테스트용 export)
 // eslint-disable-next-line react-refresh/only-export-components
-export function reviewsFromResult(result) {
-    if (!result || typeof result !== 'object' || !Array.isArray(result.items)) return [];
-    return result.items
-        .filter(item => item?.review)
-        .map(item => ({
-            ...item.review,
-            decision: item.decision,
-            dataQuality: item.decision?.dataQuality,
-        }));
+export function heroDecisionSeqs(hand) {
+    const heroSeat = hand?.detailed?.heroSeat;
+    if (!Number.isInteger(heroSeat) || !Array.isArray(hand?.actions)) return [];
+    const seqs = hand.actions
+        .filter(action => action && action.seat === heroSeat
+            && Number.isInteger(action.seq) && DETAILED_ACTION_TYPE_SET.has(action.type))
+        .map(action => action.seq)
+        .sort((a, b) => a - b);
+    return [...new Set(seqs)];
+}
+
+// 게이트웨이가 반환한 검증 통과 형태({result: poker-analysis-result.v1, review})만 카드로
+// 매핑한다. 대체 형태 폴백은 validateAnalysisResult를 우회한 미검증 응답을 그대로 화면에
+// 올리는 통로가 되므로 금지 — envelope schemaVersion이 다르면 렌더하지 않는다. (테스트용 export)
+// eslint-disable-next-line react-refresh/only-export-components
+export function cardModelFromOutcome(outcome) {
+    const result = outcome?.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+    if (result.schemaVersion !== ANALYSIS_RESULT_SCHEMA_VERSION) return null;
+    const explanation = result.explanation && typeof result.explanation === 'object' && !Array.isArray(result.explanation)
+        ? result.explanation
+        : {};
+    const review = outcome.review && typeof outcome.review === 'object' && !Array.isArray(outcome.review)
+        ? outcome.review
+        : null;
+    return {
+        decisionId: stringValue(result.decisionId),
+        analysisMode: stringValue(result.analysisMode),
+        assessment: stringValue(review?.assessment, 'not_gradable'),
+        street: stringValue(review?.street),
+        confidence: result.confidence && typeof result.confidence === 'object' ? result.confidence.overall : null,
+        headline: stringValue(explanation.headline),
+        reasoning: safeArray(explanation.reasoning),
+        alternatives: safeArray(explanation.alternatives),
+        unknowns: safeArray(result.unknowns),
+        studyQuestion: stringValue(safeArray(explanation.studyQuestions)[0]),
+        cached: !!outcome.cached,
+    };
+}
+
+// 구조화 오류(poker-analysis-error.v1)는 userMessageKo만 표시한다 (진단 문자열은 화면 밖).
+function errorMessageFrom(error) {
+    if (error && typeof error === 'object' && error.schemaVersion === ANALYSIS_ERROR_SCHEMA_VERSION) {
+        return stringValue(error.userMessageKo, '알 수 없는 분석 오류입니다.');
+    }
+    if (error instanceof Error) return error.message;
+    return stringValue(error?.message, '알 수 없는 오류');
+}
+
+// 상대 통계 시간축 (연구 기준서 §12.1): 현재 핸드 "이전" 자료만으로 만든 상대 모델 참조.
+// computeStatsAsOf(B의 as-of API)의 truncated 플래그가 시간축 보장이다 — 대상 핸드를 목록에서
+// 찾지 못하면(보장 실패) 참조를 생략한다. heuristic 모드는 상대 모델을 프롬프트에 싣지 않으므로
+// lifetime window의 통계 Map 자체는 버리고, snapshot의 opponentModelRef 참조 필드만 채운다.
+// asOfHandId는 "포함된 마지막" 핸드다 — 현재 핸드 id를 넣으면 snapshot 빌더가 거부한다.
+function opponentModelRefFor(hand, allHands) {
+    if (!hand || typeof hand.id !== 'string' || !Array.isArray(allHands)) return null;
+    const asOf = computeStatsAsOf(allHands, { beforeHandId: hand.id, windows: ['lifetime'] });
+    if (!asOf.truncated) return null;
+    const index = allHands.findIndex(item => item?.id === hand.id);
+    if (index <= 0) return null; // 이전 핸드가 없으면 참조할 상대 모델도 없다
+    const lastIncluded = allHands[index - 1];
+    if (typeof lastIncluded?.id !== 'string') return null;
+    return { asOfHandId: lastIncluded.id, includedHands: index };
+}
+
+// 결정별 독립 실행 + 동시 호출 상한 (기존 aiService 경로의 동시성 계약 유지)
+async function mapWithLimit(entries, limit, mapper) {
+    const results = new Array(entries.length);
+    let cursor = 0;
+
+    async function worker() {
+        while (cursor < entries.length) {
+            const index = cursor;
+            cursor += 1;
+            results[index] = await mapper(entries[index], index);
+        }
+    }
+
+    const workerCount = Math.min(limit, entries.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
 }
 
 function preflightWarnings(hand) {
@@ -119,16 +197,14 @@ function preflightWarnings(hand) {
     return warnings;
 }
 
-function resultQualityWarnings(result, reviews) {
+// snapshot dataQuality 기반 데이터 제한 안내 (기존 리뷰 dataQuality 표시와 같은 문구 규칙)
+function snapshotQualityWarnings(items) {
     const warnings = [];
-    const qualityObjects = [result?.dataQuality, ...reviews.map(review => review?.dataQuality)].filter(Boolean);
-    qualityObjects.forEach(quality => {
-        safeArray(quality.warnings).forEach(item => {
-            const text = stringValue(item);
-            if (text) warnings.push(text);
-        });
-        safeArray(quality.unknownFields).forEach(item => {
-            const text = stringValue(item);
+    items.forEach(item => {
+        const quality = item.outcome?.snapshot?.dataQuality;
+        if (!quality) return;
+        safeArray(quality.unknownFields).forEach(field => {
+            const text = stringValue(field);
             if (text) warnings.push(`미상 데이터: ${text}`);
         });
         if (quality.overall && quality.overall !== 'exact') {
@@ -165,17 +241,13 @@ function AlternativeItem({ item }) {
     );
 }
 
-function ReviewCard({ review, index, hand }) {
-    const meta = assessmentMeta(review?.assessment);
-    const confidence = normalizedConfidence(review?.confidence);
+function ReviewCard({ card, hand, decisionSeq, index, onReanalyze, reanalyzing }) {
+    const meta = assessmentMeta(card.assessment);
+    const confidence = normalizedConfidence(card.confidence);
     const confidencePercent = Math.round(confidence * 100);
-    const street = STREET_LABELS[String(review?.street || '').toLowerCase()]
-        || stringValue(review?.street, 'Street 미상');
-    const reasoning = safeArray(review?.reasoning);
-    const alternatives = safeArray(review?.alternatives);
-    const unknowns = safeArray(review?.unknowns);
-    const headline = stringValue(review?.headline, '이 결정의 복기 결과입니다.');
-    const reflectionQuestion = stringValue(review?.reflectionQuestion);
+    const street = streetLabelFor(card, hand, decisionSeq);
+    const headline = stringValue(card.headline, '이 결정의 복기 결과입니다.');
+    const reflectionQuestion = stringValue(card.studyQuestion);
 
     return (
         <article style={styles.reviewCard}>
@@ -183,7 +255,8 @@ function ReviewCard({ review, index, hand }) {
                 <div style={styles.decisionMeta}>
                     <span style={styles.decisionIndex}>#{index + 1}</span>
                     <span style={styles.streetBadge}>{street}</span>
-                    <span style={styles.actionBadge}>{reviewAction(review, hand)}</span>
+                    <span style={styles.actionBadge}>{actionLabelFor(hand, decisionSeq)}</span>
+                    {card.cached && <span style={styles.cachedBadge}>캐시됨</span>}
                 </div>
                 <span style={{ ...styles.assessmentBadge, color: meta.color, background: meta.background }}>
                     {meta.label}
@@ -206,8 +279,8 @@ function ReviewCard({ review, index, hand }) {
 
             <section style={styles.resultSection}>
                 <h4 style={styles.resultTitle}>판단 근거</h4>
-                {reasoning.length > 0 ? (
-                    <ul style={styles.list}>{reasoning.map((item, itemIndex) => (
+                {card.reasoning.length > 0 ? (
+                    <ul style={styles.list}>{card.reasoning.map((item, itemIndex) => (
                         <ReasoningItem key={itemIndex} item={item} />
                     ))}</ul>
                 ) : <p style={styles.emptyText}>근거가 제공되지 않았습니다.</p>}
@@ -215,8 +288,8 @@ function ReviewCard({ review, index, hand }) {
 
             <section style={styles.resultSection}>
                 <h4 style={styles.resultTitle}>조건부 대안</h4>
-                {alternatives.length > 0 ? (
-                    <ul style={styles.list}>{alternatives.map((item, itemIndex) => (
+                {card.alternatives.length > 0 ? (
+                    <ul style={styles.list}>{card.alternatives.map((item, itemIndex) => (
                         <AlternativeItem key={itemIndex} item={item} />
                     ))}</ul>
                 ) : <p style={styles.emptyText}>제시된 대안이 없습니다.</p>}
@@ -224,8 +297,8 @@ function ReviewCard({ review, index, hand }) {
 
             <section style={styles.resultSection}>
                 <h4 style={styles.resultTitle}>알 수 없는 정보</h4>
-                {unknowns.length > 0 ? (
-                    <ul style={styles.unknownList}>{unknowns.map((item, itemIndex) => (
+                {card.unknowns.length > 0 ? (
+                    <ul style={styles.unknownList}>{card.unknowns.map((item, itemIndex) => (
                         <li key={itemIndex}>{typeof item === 'string' ? item : JSON.stringify(item)}</li>
                     ))}</ul>
                 ) : <p style={styles.emptyText}>모델이 별도로 표시한 미상 정보가 없습니다.</p>}
@@ -237,15 +310,28 @@ function ReviewCard({ review, index, hand }) {
                     {reflectionQuestion || '이 결정의 목적과 다음 street 계획은 무엇이었나요?'}
                 </p>
             </section>
+
+            <button
+                type="button"
+                onClick={onReanalyze}
+                disabled={reanalyzing}
+                style={{ ...styles.reanalyzeButton, opacity: reanalyzing ? 0.55 : 1 }}
+            >
+                {reanalyzing ? '재분석 중…' : '재분석'}
+            </button>
         </article>
     );
 }
 
 const DetailedReviewPanel = ({ hand, settings = {} }) => {
-    const [request, setRequest] = useState({ hand: null, status: 'idle', result: null, error: '' });
+    const { archive, sessionHands } = useGame();
+    // items: [{ decisionSeq, outcome: {result, review, snapshot, cached}|null,
+    //           error: poker-analysis-error.v1|Error|null, reanalyzing: boolean }]
+    const [request, setRequest] = useState({ hand: null, status: 'idle', items: [], error: '' });
     const isCurrentRequest = request.hand === hand;
     const loading = isCurrentRequest && request.status === 'loading';
-    const result = isCurrentRequest && request.status === 'success' ? request.result : null;
+    const items = isCurrentRequest && request.status === 'success' ? request.items : [];
+    const hasResults = items.length > 0;
     const error = isCurrentRequest && request.status === 'error' ? request.error : '';
     const isDetailed = !!hand?.detailed?.enabled;
     const isCompleted = !!hand?.detailed?.completed;
@@ -255,10 +341,13 @@ const DetailedReviewPanel = ({ hand, settings = {} }) => {
     const heroCardsKnown = safeArray(hand?.detailed?.heroCards).length === 2;
     const eligible = isDetailed && isCompleted && hasHero;
     const warnings = preflightWarnings(hand);
-    const reviews = reviewsFromResult(result);
-    const itemErrors = safeArray(result?.items).filter(item => item?.error);
-    const returnedQualityWarnings = resultQualityWarnings(result, reviews);
-    const unexpectedMode = result?.analysisMode && result.analysisMode !== 'heuristic_no_solver';
+    const cards = items
+        .filter(item => item.outcome)
+        .map(item => ({ item, card: cardModelFromOutcome(item.outcome) }))
+        .filter(entry => entry.card);
+    const itemErrors = items.filter(item => item.error);
+    const returnedQualityWarnings = snapshotQualityWarnings(items);
+    const unexpectedMode = cards.some(entry => entry.card.analysisMode !== 'heuristic_no_solver');
 
     let aiPreview;
     try {
@@ -267,20 +356,82 @@ const DetailedReviewPanel = ({ hand, settings = {} }) => {
         aiPreview = { label: 'AI', model: '', apiKey: '' };
     }
 
+    // 아카이브 + 현재 세션 핸드 (시간순) — as-of 상대 모델 참조의 시간축 원본
+    const allHands = () => [
+        ...safeArray(archive).flatMap(session => safeArray(session?.hands)),
+        ...safeArray(sessionHands),
+    ];
+
+    const runDecision = async (targetHand, decisionSeq, options, opponentRef, bypassCache) => {
+        try {
+            return await analyzeDecision({
+                hand: targetHand,
+                decisionSeq,
+                ai: options,
+                opponentStatsAsOf: opponentRef,
+                bypassCache,
+            });
+        } catch (caught) {
+            // 게이트웨이는 구조화 오류를 반환하는 것이 계약이지만, 예기치 못한 throw도
+            // 결정 하나의 실패로만 격리한다 (per-decision independence).
+            return { error: caught instanceof Error ? caught : new Error(String(caught)) };
+        }
+    };
+
     const analyze = async () => {
         if (!eligible || loading) return;
         const targetHand = hand;
-        setRequest({ hand: targetHand, status: 'loading', result: null, error: '' });
+        setRequest({ hand: targetHand, status: 'loading', items: [], error: '' });
         try {
             const options = resolveAiOptions(settings || {});
             if (!options.apiKey) throw new Error(`설정에서 ${options.label || 'AI'} API 키를 입력하세요.`);
-            const nextResult = await analyzeDetailedHand(targetHand, options);
-            if (!nextResult) throw new Error('AI 리뷰 결과가 비어 있습니다.');
-            setRequest({ hand: targetHand, status: 'success', result: nextResult, error: '' });
+            const decisionSeqs = heroDecisionSeqs(targetHand);
+            if (decisionSeqs.length === 0) throw new Error('분석할 히어로 액션이 없습니다.');
+            if (decisionSeqs.length > MAX_DECISIONS) {
+                throw new Error(`한 핸드에서 분석할 수 있는 히어로 결정은 최대 ${MAX_DECISIONS}개입니다.`);
+            }
+            const opponentRef = opponentModelRefFor(targetHand, allHands());
+            const outcomes = await mapWithLimit(decisionSeqs, MAX_CONCURRENCY, seq =>
+                runDecision(targetHand, seq, options, opponentRef, false));
+            const nextItems = decisionSeqs.map((seq, index) => ({
+                decisionSeq: seq,
+                outcome: outcomes[index].error ? null : outcomes[index],
+                error: outcomes[index].error ?? null,
+                reanalyzing: false,
+            }));
+            setRequest({ hand: targetHand, status: 'success', items: nextItems, error: '' });
         } catch (caught) {
             const message = caught instanceof Error ? caught.message : '상세 핸드 리뷰에 실패했습니다.';
-            setRequest({ hand: targetHand, status: 'error', result: null, error: message });
+            setRequest({ hand: targetHand, status: 'error', items: [], error: message });
         }
+    };
+
+    // 카드 하나만 캐시를 우회해 다시 분석한다 (다른 결정 결과는 그대로 유지)
+    const reanalyze = async (decisionSeq) => {
+        const targetHand = hand;
+        let options;
+        try {
+            options = resolveAiOptions(settings || {});
+        } catch {
+            return;
+        }
+        if (!options.apiKey) return;
+        const patchItem = (patch) => setRequest(prev => {
+            if (prev.hand !== targetHand || prev.status !== 'success') return prev;
+            return {
+                ...prev,
+                items: prev.items.map(item =>
+                    item.decisionSeq === decisionSeq ? { ...item, ...patch } : item),
+            };
+        });
+        patchItem({ reanalyzing: true });
+        const opponentRef = opponentModelRefFor(targetHand, allHands());
+        const outcome = await runDecision(targetHand, decisionSeq, options, opponentRef, true);
+        patchItem({
+            outcome: outcome.error ? null : outcome,
+            error: outcome.error ?? null,
+            reanalyzing: false,
+        });
     };
 
     if (!hand) {
@@ -333,7 +484,7 @@ const DetailedReviewPanel = ({ hand, settings = {} }) => {
                             disabled={loading}
                             style={{ ...styles.analyzeButton, opacity: loading ? 0.55 : 1 }}
                         >
-                            {loading ? '현재 시점별 복기 중…' : result ? 'AI 리뷰 다시 실행' : 'AI 핸드 리뷰'}
+                            {loading ? '현재 시점별 복기 중…' : hasResults ? 'AI 리뷰 다시 실행' : 'AI 핸드 리뷰'}
                         </button>
                     </div>
 
@@ -373,7 +524,7 @@ const DetailedReviewPanel = ({ hand, settings = {} }) => {
                 </div>
             )}
 
-            {result && (
+            {hasResults && (
                 <div style={styles.results}>
                     {unexpectedMode && (
                         <div style={styles.errorPanel} role="alert">
@@ -395,17 +546,24 @@ const DetailedReviewPanel = ({ hand, settings = {} }) => {
                             <strong>{itemErrors.length}개 결정은 리뷰하지 못했습니다.</strong>
                             <ul style={styles.warningList}>
                                 {itemErrors.map((item, index) => (
-                                    <li key={`${item.decision?.decisionId || 'decision'}-${index}`}>
-                                        {STREET_LABELS[item.decision?.street] || item.decision?.street || 'Street 미상'} · {' '}
-                                        {item.error?.message || '알 수 없는 오류'}
+                                    <li key={`${item.decisionSeq}-${index}`}>
+                                        {streetLabelFor(null, hand, item.decisionSeq)} · {errorMessageFrom(item.error)}
                                     </li>
                                 ))}
                             </ul>
                         </div>
                     )}
 
-                    {reviews.length > 0 ? reviews.map((review, index) => (
-                        <ReviewCard key={review?.decisionId || index} review={review} index={index} hand={hand} />
+                    {cards.length > 0 ? cards.map((entry, index) => (
+                        <ReviewCard
+                            key={entry.card.decisionId || entry.item.decisionSeq}
+                            card={entry.card}
+                            hand={hand}
+                            decisionSeq={entry.item.decisionSeq}
+                            index={index}
+                            onReanalyze={() => reanalyze(entry.item.decisionSeq)}
+                            reanalyzing={!!entry.item.reanalyzing}
+                        />
                     )) : (
                         <div style={styles.guardPanel}>
                             <strong>표시할 Hero 결정 리뷰가 없습니다.</strong>
@@ -471,6 +629,7 @@ const styles = {
     decisionIndex: { color: '#64748b', fontSize: '0.67rem', fontWeight: 900 },
     streetBadge: { padding: '4px 7px', borderRadius: '7px', background: '#1e293b', color: '#cbd5e1', fontSize: '0.67rem', fontWeight: 900 },
     actionBadge: { padding: '4px 7px', borderRadius: '7px', background: '#312e81', color: '#e0e7ff', fontSize: '0.67rem', fontWeight: 900 },
+    cachedBadge: { padding: '4px 7px', borderRadius: '7px', border: '1px solid #475569', background: '#0f172a', color: '#94a3b8', fontSize: '0.65rem', fontWeight: 900 },
     assessmentBadge: { padding: '5px 8px', borderRadius: '999px', fontSize: '0.65rem', fontWeight: 1000 },
     headline: { margin: '11px 0 0', color: '#f8fafc', fontSize: '1rem', lineHeight: 1.42 },
     assessmentDescription: { margin: '5px 0 0', color: '#94a3b8', fontSize: '0.72rem', lineHeight: 1.45 },
@@ -493,6 +652,10 @@ const styles = {
     reflectionBox: { marginTop: '14px', padding: '11px', border: '1px solid #7c3aed', borderRadius: '11px', background: '#1e1b4b' },
     reflectionLabel: { color: '#c4b5fd', fontSize: '0.66rem', fontWeight: 1000, letterSpacing: '0.06em' },
     reflectionQuestion: { margin: '5px 0 0', color: '#f5f3ff', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5 },
+    reanalyzeButton: {
+        minHeight: '38px', marginTop: '13px', padding: '6px 12px', border: '1px solid #475569', borderRadius: '9px',
+        background: '#1e293b', color: '#cbd5e1', fontSize: '0.72rem', fontWeight: 800, cursor: 'pointer',
+    },
 };
 
 export default DetailedReviewPanel;
