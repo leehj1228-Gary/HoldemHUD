@@ -18,3 +18,4 @@ android/local.properties
 android/app/release/
 *.keystore
 *.jks
+android/build_log*.txt
