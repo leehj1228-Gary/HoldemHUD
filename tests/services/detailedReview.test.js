@@ -174,6 +174,20 @@ describe('buildDetailedReviewPayload knowledge cutoff', () => {
         expect(prompt).toContain('decision.state.legalActions');
         expect(prompt).not.toContain('Villain Real Name');
     });
+
+    it('익명화는 프롬프트 게이트의 불변식이다 — 실명 좌석에서 만든 최종 프롬프트에 이름이 없다', () => {
+        // completedHand의 좌석/액션은 전부 'Hero Real Name'/'Villain Real Name'을 담는다.
+        const payload = buildDetailedReviewPayload(completedHand(), [{ decisionSeq: 3 }]);
+        const prompt = buildDecisionPrompt(payload.shared, payload.decisions[0]);
+
+        expect(prompt).not.toContain('Hero Real Name');
+        expect(prompt).not.toContain('Villain Real Name');
+        // 게이트의 재귀 sanitizer: 어떤 깊이에서도 name 필드는 직렬화되지 않는다
+        expect(prompt).not.toMatch(/"name"\s*:/);
+        // 익명 좌석 id는 유지
+        expect(prompt).toContain('"playerId": "seat:0"');
+        expect(prompt).toContain('"playerId": "seat:1"');
+    });
 });
 
 describe('validateDecisionReview', () => {

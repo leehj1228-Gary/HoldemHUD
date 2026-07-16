@@ -100,6 +100,25 @@ describe('normalizeDetailedHandRecord', () => {
         expect(() => deriveDetailedState(normalized)).not.toThrow();
     });
 
+    it('repairs duplicate action seq values by renumbering in array order', () => {
+        // seq는 다운스트림 식별자(React key·decisionId·AI 리뷰): 중복 레코드는 거부가
+        // 아니라 0..n-1 재부여로 복구되어야 한다.
+        const hand = corrupted(h => { h.actions[1].seq = h.actions[0].seq; });
+        const normalized = normalizeDetailedHandRecord(hand);
+        expect(normalized).not.toBeNull();
+        expect(normalized.actions.map(action => action.seq)).toEqual([0, 1]);
+        expect(() => deriveDetailedState(normalized)).not.toThrow();
+    });
+
+    it('passes unique (even non-contiguous) seq values through unchanged', () => {
+        const hand = corrupted(h => {
+            h.actions[0].seq = 3;
+            h.actions[1].seq = 7;
+        });
+        const normalized = normalizeDetailedHandRecord(hand);
+        expect(normalized.actions.map(action => action.seq)).toEqual([3, 7]);
+    });
+
     it.each([
         ['reveal cards are not an array', hand => { hand.detailed.reveals = [{ seat: 1, cards: null }]; }],
         ['a reveal seat is unknown', hand => { hand.detailed.reveals = [{ seat: 9, cards: ['Jc', 'Td'] }]; }],

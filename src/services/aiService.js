@@ -9,6 +9,7 @@ import {
     buildDecisionPrompt,
     validateDecisionReview,
 } from './detailedReview.js';
+import { DETAILED_ACTION_TYPES } from '../engine/schema.js';
 
 const TIMEOUT_MS = 60000;
 
@@ -214,7 +215,8 @@ async function callAI(prompt, { provider = 'gemini', apiKey, model } = {}) {
 const DETAILED_ANALYSIS_MODE = 'heuristic_no_solver';
 const DETAILED_MAX_DECISIONS = 30;
 const DETAILED_MAX_CONCURRENCY = 2;
-const DETAILED_ACTION_TYPES = new Set(['fold', 'check', 'call', 'bet', 'raise']);
+// 액션 어휘는 schema.js 단일 선언에서 파생 (재선언 금지)
+const DETAILED_ACTION_TYPE_SET = new Set(DETAILED_ACTION_TYPES);
 
 function detailedError(error, type) {
     const message = error instanceof Error ? error.message : String(error || '알 수 없는 오류');
@@ -280,7 +282,7 @@ export async function analyzeDetailedHand(hand, options) {
     const heroSeat = hand.detailed.heroSeat;
     const heroActions = hand.actions
         .filter(action => action && action.seat === heroSeat
-            && Number.isInteger(action.seq) && DETAILED_ACTION_TYPES.has(action.type))
+            && Number.isInteger(action.seq) && DETAILED_ACTION_TYPE_SET.has(action.type))
         .slice()
         .sort((a, b) => a.seq - b.seq);
     if (heroActions.length === 0) throw new Error('분석할 히어로 액션이 없습니다');

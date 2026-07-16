@@ -7,6 +7,7 @@ import {
     initialState,
     isMidHand as isMidHandForSession,
     canDisableDetailedTracking,
+    hasIncompleteDetailedHand,
 } from './gameReducer.js';
 import { deriveHandState, legalActionsFor as engineLegalActionsFor } from '../engine/handEngine.js';
 import {
@@ -181,8 +182,13 @@ export function GameProvider({ children }) {
         }
         return map;
     }, [currentHand]);
+    // 라이브 스탯은 §6 계약대로 currentHand를 포함한다. includeInProgressDetailed는
+    // 진행 중 상세 핸드(완료 전)도 리플레이하게 한다 — session.hands에는 미완료 상세
+    // 핸드가 존재할 수 없으므로(advanceHand가 차단) 이 플래그는 currentHand에만 작용한다.
     const playerStats = useMemo(
-        () => computeAllStats(currentHand ? [...sessionHands, currentHand] : sessionHands),
+        () => computeAllStats(
+            currentHand ? [...sessionHands, currentHand] : sessionHands,
+            { includeInProgressDetailed: true }),
         [sessionHands, currentHand]);
     // 상세 UI가 쓰는 칩 단위 — 화면이 엔진을 직접 import하지 않도록 컨텍스트에서 계산.
     // 상세 추적 중이면 핸드에 동결된 단위를, 아니면 블라인드에서 유도한 단위를 쓴다.
@@ -253,6 +259,7 @@ export function GameProvider({ children }) {
         isDetailed,
         isMidHand: session ? isMidHandForSession(session) : false,
         canDisableDetailed: canDisableDetailedTracking(session),
+        detailedIncomplete: hasIncompleteDetailedHand(session),
         chipUnit,
         derived,
         positions,

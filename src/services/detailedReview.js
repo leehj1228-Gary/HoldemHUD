@@ -644,6 +644,23 @@ export function buildDetailedReviewPayload(hand, decisionSnapshots) {
     });
 }
 
+/**
+ * Anonymization invariant at the prompt boundary: recursively drop every `name`
+ * field from the outgoing payload. Producers already map players to seat ids,
+ * but that is a convention — this gate guarantees that no payload shape (today's
+ * or a future whitelist extension) can carry a real player name into a prompt.
+ */
+function stripNameFields(value) {
+    if (Array.isArray(value)) return value.map(stripNameFields);
+    if (!isObject(value)) return value;
+    const result = {};
+    for (const [key, entry] of Object.entries(value)) {
+        if (key === 'name') continue;
+        result[key] = stripNameFields(entry);
+    }
+    return result;
+}
+
 /** Build the deterministic, single-decision prompt used by a provider-facing layer. */
 export function buildDecisionPrompt(shared, decision) {
     const validated = validateDetailedReviewPayload({
@@ -652,8 +669,10 @@ export function buildDecisionPrompt(shared, decision) {
         shared,
         decisions: [decision],
     });
-    const safeShared = validated.shared;
-    const safeDecision = validated.decisions[0];
+    // Single choke point: every provider prompt is serialized here, after the
+    // whitelist and after the no-names invariant.
+    const safeShared = stripNameFields(validated.shared);
+    const safeDecision = stripNameFields(validated.decisions[0]);
     const input = JSON.stringify({ shared: safeShared, decision: safeDecision }, null, 2);
 
     return [

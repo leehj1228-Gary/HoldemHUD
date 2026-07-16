@@ -149,6 +149,15 @@ function isCompletedSample(hand) {
     return !!hand && (!hand.detailed?.enabled || hand.detailed.completed === true);
 }
 
+/**
+ * 현재 핸드가 상세 기록 활성 상태이지만 아직 완료되지 않았는가 — advanceHand의
+ * 수동/자동 다음핸드 차단 판정과 화면(다음 핸드 버튼 비활성)이 공유하는 순수 판정.
+ */
+export function hasIncompleteDetailedHand(session) {
+    const cur = session?.currentHand;
+    return !!(cur?.detailed?.enabled && !cur.detailed.completed);
+}
+
 function normalizeLoadedHand(hand) {
     if (hand?.detailed?.enabled) return normalizeDetailedHandRecord(hand);
     return isValidHandRecord(hand) ? hand : null;
@@ -192,7 +201,7 @@ function withQuarantine(owner, quarantined) {
  */
 function advanceHand(session, endedAt) {
     const cur = session.currentHand;
-    if (cur?.detailed?.enabled && !cur.detailed.completed) return session;
+    if (hasIncompleteDetailedHand(session)) return session;
     const shouldPersist = !!cur && (cur.actions.length > 0 || cur.detailed?.completed);
     if (!shouldPersist) {
         const next = clampStraddle({
@@ -243,16 +252,25 @@ export function reducer(state, action) {
             } else if (session) {
                 session = null; // 좌석 배열조차 없는 세션은 복원 불가
             }
-            const archive = Array.isArray(payload.archive)
-                ? payload.archive.map(rec => {
-                    if (!rec || typeof rec !== 'object' || !Array.isArray(rec.hands)) return rec;
-                    const partitioned = partitionLoadedHands(rec.hands);
+            let archive = state.archive;
+            if (Array.isArray(payload.archive)) {
+                archive = [];
+                for (const rec of payload.archive) {
+                    // 세션 레코드 자체의 방어: null/원시값은 보존할 것이 없으니 드롭,
+                    // hands가 배열이 아닌 객체 레코드는 hands만 []로 복구해 나머지 필드 보존.
+                    if (!rec || typeof rec !== 'object') {
+                        quarantinedCount += 1;
+                        continue;
+                    }
+                    const hasHandsArray = Array.isArray(rec.hands);
+                    if (!hasHandsArray) quarantinedCount += 1;
+                    const partitioned = partitionLoadedHands(hasHandsArray ? rec.hands : []);
                     quarantinedCount += partitioned.quarantined.length;
-                    return withQuarantine({ ...rec, hands: partitioned.hands }, partitioned.quarantined);
-                })
-                : state.archive;
+                    archive.push(withQuarantine({ ...rec, hands: partitioned.hands }, partitioned.quarantined));
+                }
+            }
             if (quarantinedCount > 0) {
-                console.warn(`[gameReducer] 복원 불가 핸드 ${quarantinedCount}개를 quarantinedHands로 격리 — 원본 보존, 통계·화면에서는 제외`);
+                console.warn(`[gameReducer] 복원 불가 항목 ${quarantinedCount}개 정리 — 핸드는 quarantinedHands로 격리(원본 보존), 손상 아카이브 레코드는 hands만 복구하거나 드롭. 통계·화면에서는 제외`);
             }
             return {
                 ...state,
@@ -336,6 +354,9 @@ export function reducer(state, action) {
         case 'RECORD_ACTION': {
             if (!state.session || !state.session.currentHand) return state;
             const cur = state.session.currentHand;
+            // 상세 모드 가드: v1 액션이 v2 원장에 섞이면 street 단조성이 깨져
+            // 다음 로드에서 드래프트 전체가 파기된다 — 다른 상세 민감 액션과 동일하게 no-op.
+            if (cur.detailed?.enabled) return state;
             const next = applyAction(cur, action.seat, action.actionType);
             if (next === cur) return state; // 불법 액션 → no-op (참조 유지)
             const isOver = deriveHandState(next).isOver;
@@ -434,14 +455,16 @@ export function reducer(state, action) {
             const cur = s.currentHand;
             if (cur?.detailed?.enabled) {
                 const previous = undoDetailedStep(cur);
-                if (previous === cur) return state;
-                return {
-                    ...state,
-                    session: { ...s, currentHand: previous },
-                    autoNext: { pending: false },
-                };
-            }
-            if (cur && cur.actions.length > 0) {
+                if (previous !== cur) {
+                    return {
+                        ...state,
+                        session: { ...s, currentHand: previous },
+                        autoNext: { pending: false },
+                    };
+                }
+                // 갓 활성화한 상세 핸드(되돌릴 스텝 없음)는 간편 경로와 동일하게
+                // 아래 핸드 경계 넘기로 폴스루 — 상세 셸은 빈 핸드처럼 폐기된다.
+            } else if (cur && cur.actions.length > 0) {
                 // 현재 핸드에서 마지막 액션 제거
                 const trimmed = { ...cur, actions: cur.actions.slice(0, -1) };
                 return { ...state, session: { ...s, currentHand: trimmed }, autoNext: { pending: false } };

@@ -167,6 +167,71 @@ describe('precision propagation and unknown amounts', () => {
         expect(state.stackQuality).toBe('unknown');
         expect(state.quality).toBe('unknown');
     });
+
+    it('rejects an out-of-vocabulary precision token as an illegal no-op', () => {
+        const hand = tracked();
+        // 'approximate' is UI-era vocabulary, not a DETAILED_PRECISIONS token: it must
+        // never be silently upgraded to 'exact'.
+        expect(applyDetailedAction(hand, 0, 'call', { precision: 'approximate' })).toBe(hand);
+        expect(applyDetailedAction(hand, 0, 'raise', { amountTo: 6, precision: 'roughly' })).toBe(hand);
+        expect(applyDetailedAction(hand, 0, 'call', { precision: null })).toBe(hand);
+        // Schema tokens (and the omitted default) still work.
+        expect(applyDetailedAction(hand, 0, 'call', { precision: 'estimated' }).actions.at(-1))
+            .toMatchObject({ type: 'call', precision: 'estimated' });
+        expect(applyDetailedAction(hand, 0, 'call').actions.at(-1))
+            .toMatchObject({ type: 'call', precision: 'exact' });
+    });
+});
+
+describe('legacy ledger tolerance and quality degradation', () => {
+    function injectedAction(seat, overrides = {}) {
+        return {
+            seq: 99, seat, name: `P${seat}`, position: null, type: 'call', raiseLevel: 0,
+            street: 'preflop', amountTo: 2, amountAdded: 2, precision: 'exact', isAllIn: false,
+            ...overrides,
+        };
+    }
+
+    it('a structurally corrupt ledger reports validationErrors and never exact quality', () => {
+        const hand = tracked();
+        const corrupt = { ...hand, actions: [...hand.actions, injectedAction(99)] };
+        const state = deriveDetailedState(corrupt);
+
+        expect(state.validationErrors).toEqual(['invalid actor seat 99']);
+        expect(state.pot).toBe(3); // ghost chips are not silently counted
+        expect(state.potQuality).toBe('estimated'); // degraded via worst-of, not 'exact'
+        expect(state.stackQuality).toBe('estimated');
+        expect(state.quality).toBe('estimated');
+    });
+
+    it('flags an action from a folded actor while still replaying the ledger', () => {
+        let hand = applyDetailedAction(tracked(), 0, 'fold');
+        hand = { ...hand, actions: [...hand.actions, injectedAction(0, { seq: 1 })] };
+        const state = deriveDetailedState(hand);
+
+        expect(state.validationErrors).toEqual(['action from folded seat 0']);
+        expect(state.pot).toBe(5); // tolerated: chips replayed, not rejected
+        expect(state.potQuality).toBe('estimated'); // and quality degrades automatically
+        expect(state.quality).not.toBe('exact');
+    });
+
+    it('flags an action from an already all-in actor', () => {
+        let hand = tracked(3, [100, 5, 100]);
+        hand = applyDetailedAction(hand, 0, 'raise', { amountTo: 10 });
+        hand = applyDetailedAction(hand, 1, 'call'); // short call marks seat 1 all-in
+        hand = { ...hand, actions: [...hand.actions, injectedAction(1, { seq: 3, amountTo: 10, amountAdded: 5 })] };
+        const state = deriveDetailedState(hand);
+
+        expect(state.validationErrors).toEqual(['action from all-in seat 1']);
+        expect(state.potQuality).not.toBe('exact');
+    });
+
+    it('keeps a clean interactive ledger at exact quality with no validation errors', () => {
+        const state = deriveDetailedState(closeThreeHandedLimpPot(tracked()));
+        expect(state.validationErrors).toEqual([]);
+        expect(state.potQuality).toBe('exact');
+        expect(state.quality).toBe('exact');
+    });
 });
 
 describe('street transitions and postflop order', () => {

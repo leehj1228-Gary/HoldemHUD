@@ -257,11 +257,15 @@ function replayHand(hand, stats) {
  * 모든 플레이어의 통계를 핸드 레코드 배열에서 한 번의 리플레이 패스로 계산한다.
  * 각 스탯은 { num, den, pct } (pct는 반올림 정수, den 0이면 null).
  * @param {Array<object>} hands - HandRecord 배열 (진행 중 핸드 포함 가능; 잘못된 레코드는 건너뜀)
+ * @param {{includeInProgressDetailed?: boolean}} [opts]
+ *   includeInProgressDetailed: true면 진행 중(미완료) 상세 핸드도 일반 핸드처럼 리플레이
+ *   한다 — 라이브 currentHand 포함 계약(설계 §6) 전용. 기본 false: 아카이브된 상세
+ *   드래프트는 완료 표본이 아니므로 dealt/VPIP/PFR 분모에서 제외.
  * @returns {Map<string, object>} trim된 이름 → PlayerStats
  *   PlayerStats = { dealt, vpip, pfr, threeBet, ft3b, fourBet, ats, fts, openLimp,
  *                   coldCall, straddle, pos: {EP,MP,CO,BTN,SB,BB: {dealt, vpip, pfr}} }
  */
-export function computeAllStats(hands) {
+export function computeAllStats(hands, { includeInProgressDetailed = false } = {}) {
     const stats = new Map();
     if (!Array.isArray(hands)) return stats;
     for (const hand of hands) {
@@ -269,7 +273,8 @@ export function computeAllStats(hands) {
         // Detailed hands can be archived as recoverable drafts when a session is
         // stopped mid-hand. They are evidence, but not a completed statistical
         // sample and must not inflate dealt/VPIP/PFR denominators.
-        if (hand.detailed?.enabled && hand.detailed.completed !== true) continue;
+        if (!includeInProgressDetailed
+            && hand.detailed?.enabled && hand.detailed.completed !== true) continue;
         replayHand(hand, stats);
     }
     for (const st of stats.values()) finalizeStats(st);

@@ -9,7 +9,8 @@ import {
     normalizeCard,
 } from './schema.js';
 
-const PRECISION_RANK = { exact: 0, estimated: 1, unknown: 2 };
+// 정밀도 서열은 schema의 DETAILED_PRECISIONS 선언 순서에서 파생한다 (재선언 금지).
+const PRECISION_RANK = Object.fromEntries(PRECISIONS.map((token, rank) => [token, rank]));
 const CHIP_ACTIONS = new Set(['call', 'bet', 'raise']);
 
 function finiteAmount(value) {
@@ -423,6 +424,13 @@ function streetReplay(hand, players, street, forced, actions, incomingQuality) {
             validationErrors.push(`invalid actor seat ${action.seat}`);
             continue;
         }
+        // 레거시/외부 원장 관용: 이미 폴드했거나 올인한 좌석의 액션은 리플레이는 하되
+        // validationErrors로 표면화한다 (거부 아님 — 소비자가 품질 저하로 반영).
+        if (player.folded) {
+            validationErrors.push(`action from folded seat ${action.seat}`);
+        } else if (player.allIn) {
+            validationErrors.push(`action from all-in seat ${action.seat}`);
+        }
 
         const precision = normalizePrecision(action.precision, 'unknown');
         quality = worsePrecision(quality, precision);
@@ -554,9 +562,12 @@ export function deriveDetailedState(hand) {
         ? players.filter(p => p.active).reduce((sum, p) => sum + p.totalCommitted, 0)
         : null;
     const stacksKnown = players.filter(p => p.active).every(p => finiteAmount(p.startingStack) && finiteAmount(p.stack));
+    // 리플레이가 구조적 모순(validationErrors)을 발견한 원장은 정밀도와 무관하게
+    // 'exact'를 보고할 수 없다 — worst-of로 최소 'estimated'까지 강등한다.
+    const replayFloor = allErrors.length > 0 ? 'estimated' : 'exact';
     const actionQuality = hand.actions.reduce(
         (q, a) => worsePrecision(q, normalizePrecision(a.precision, 'unknown')),
-        forced.quality);
+        worsePrecision(forced.quality, replayFloor));
     const potQuality = totalsKnown ? actionQuality : 'unknown';
     const startingStackQuality = players
         .filter(p => p.active)
@@ -688,7 +699,10 @@ export function applyDetailedAction(hand, seat, type, options = {}) {
     // destroy must never be produced in the first place (standard illegal no-op).
     if (hand.actions.length >= MAX_DETAILED_ACTIONS) return hand;
     const player = state.playerBySeat.get(seat);
-    let precision = normalizePrecision(options.precision, 'exact');
+    // 어휘 밖 정밀도 토큰은 'exact'로 승격하지 않고 불법 no-op으로 거부한다 —
+    // 누락된 번역 계층이 추정 금액을 확신 금액으로 둔갑시키는 방향의 버그 차단.
+    if (options.precision !== undefined && !PRECISIONS.includes(options.precision)) return hand;
+    let precision = options.precision === undefined ? 'exact' : options.precision;
     if (type === 'call') precision = worsePrecision(precision, state.toCallQuality || 'unknown');
     if (type === 'all-in' && (options.amountSource === 'stack' || !finiteAmount(options.amountTo))) {
         precision = worsePrecision(precision, player?.stackPrecision || 'unknown');

@@ -15,12 +15,12 @@ const GameScreen = () => {
         blinds, currency, currentHand, sessionHands,
         derived, isDetailed, enableDetailedTracking, disableDetailedTracking,
         recordDetailedAction, advanceDetailedStreet, setDetailedCards, completeDetailedHand,
-        isMidHand, canDisableDetailed, chipUnit,
+        isMidHand, canDisableDetailed, chipUnit, detailedIncomplete,
     } = useGame();
 
     // 진행 중 핸드면 테이블 구성 변경 불가 — 리듀서와 같은 판정(isMidHand)을 컨텍스트에서 공유
+    // (detailedIncomplete도 리듀서의 advanceHand 차단 판정을 컨텍스트에서 그대로 받는다)
     const handInProgress = isMidHand;
-    const detailedIncomplete = isDetailed && !currentHand?.detailed?.completed;
 
     const [isStatsOpen, setIsStatsOpen] = useState(false);
     const [isSeatModalOpen, setIsSeatModalOpen] = useState(false);
@@ -40,14 +40,13 @@ const GameScreen = () => {
     };
 
     // 리듀서가 no-op한 액션(규칙 위반 금액 등)을 boolean으로 되돌려
-    // DetailedTracker가 시트를 닫지 않고 거부 피드백을 줄 수 있게 한다
+    // DetailedTracker가 시트를 닫지 않고 거부 피드백을 줄 수 있게 한다.
+    // 정밀도는 UI가 schema DETAILED_PRECISIONS 토큰을 그대로 전달한다 —
+    // 번역 계층 없음, 어휘 밖 토큰은 엔진이 불법 no-op으로 거부.
     const handleDetailedAction = (seat, type, options = {}) => {
-        const precision = options.amountQuality === 'approximate'
-            ? 'estimated'
-            : (options.amountQuality || options.precision || 'exact');
         return recordDetailedAction(seat, type, {
             amountTo: options.amount,
-            precision,
+            precision: options.amountQuality || options.precision || 'exact',
             isAllIn: !!options.isAllIn,
             allInKind: options.allInKind,
             amountSource: options.sizeSource,

@@ -293,6 +293,11 @@ function normalizeDetailedHandRecordUnsafe(hand) {
         latestStreetIndex = streetIndex;
         actions.push(action);
     }
+    // seq는 다운스트림에서 식별자다 (React key·decisionId·AI 리뷰). 중복이면 레코드를
+    // 버리는 대신 배열 순서(0..n-1)로 전면 재부여해 복구한다 — 유일하면 그대로 통과.
+    if (new Set(actions.map(action => action.seq)).size !== actions.length) {
+        actions.forEach((action, index) => { action.seq = index; });
+    }
 
     const detailed = hand.detailed;
     const street = detailed.street === undefined

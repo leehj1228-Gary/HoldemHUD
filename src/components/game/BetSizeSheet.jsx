@@ -1,8 +1,9 @@
 import { useState } from 'react';
 
+// 키는 schema DETAILED_PRECISIONS 토큰 그대로 — 한국어는 표시 라벨만
 const QUALITY_LABELS = {
     exact: '정확',
-    approximate: '대략',
+    estimated: '대략',
     unknown: '모름',
 };
 
@@ -129,7 +130,7 @@ function BetSizePanel({
     const belowMinimum = quality !== 'unknown' && amount !== null
         && minRequired !== null && amount < minRequired;
     const canConfirm = (quality === 'unknown' || amount !== null) && !belowMinimum;
-    const qualityPrefix = potQuality === 'approximate' || potQuality === 'estimated'
+    const qualityPrefix = potQuality === 'estimated'
         ? '≈'
         : potQuality === 'unknown' ? '?' : '=';
 
@@ -137,7 +138,7 @@ function BetSizePanel({
         setAmountText(String(preset.amount));
         setSource(preset.source);
         if (potQuality !== 'exact' && preset.source.startsWith('pot:')) {
-            setQuality('approximate');
+            setQuality('estimated');
         } else if (quality === 'unknown') {
             setQuality('exact');
         }
@@ -253,7 +254,7 @@ function BetSizePanel({
                             }}
                         >
                             <span style={styles.qualityMark}>
-                                {option === 'exact' ? '=' : option === 'approximate' ? '≈' : '?'}
+                                {option === 'exact' ? '=' : option === 'estimated' ? '≈' : '?'}
                             </span>
                             {QUALITY_LABELS[option]}
                         </button>
@@ -262,7 +263,7 @@ function BetSizePanel({
 
                 <div style={styles.hint}>
                     {quality === 'exact' && '실제 칩 금액으로 기록합니다.'}
-                    {quality === 'approximate' && '대략적인 금액으로 표시하여 분석 확신도를 낮춥니다.'}
+                    {quality === 'estimated' && '대략적인 금액으로 표시하여 분석 확신도를 낮춥니다.'}
                     {quality === 'unknown' && '금액을 추정하지 않고 모름으로 저장합니다.'}
                 </div>
 
@@ -317,7 +318,7 @@ const BetSizeSheet = ({
 }) => {
     if (!open) return null;
     const safeInitialQuality = initialQuality
-        || (potQuality === 'exact' ? 'exact' : 'approximate');
+        || (potQuality === 'exact' ? 'exact' : 'estimated');
 
     return (
         <BetSizePanel

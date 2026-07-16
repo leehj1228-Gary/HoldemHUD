@@ -27,9 +27,10 @@ function roundAmount(value) {
     return Math.round(value * 100) / 100;
 }
 
+// 정밀도 어휘는 schema DETAILED_PRECISIONS 토큰만 — 값이 있는데 토큰이 없으면 estimated
 function normalizePrecision(value, hasValue) {
     if (value === 'exact') return 'exact';
-    if (value === 'estimated' || value === 'approximate') return 'estimated';
+    if (value === 'estimated') return 'estimated';
     return hasValue ? 'estimated' : 'unknown';
 }
 

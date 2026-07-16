@@ -213,6 +213,29 @@ export function deriveHandState(hand) {
     };
 }
 
+/** SB 좌석 (HU에서는 딜러가 SB 겸 BTN). 액티브 2인 미만이면 null. */
+function smallBlindSeat(seats, dealerSeat) {
+    const active = activeSorted(seats);
+    const t = active.length;
+    if (t < 2) return null;
+    const dIdx = dealerIndexIn(active, dealerSeat);
+    return active[(dIdx + (t === 2 ? 0 : 1)) % t].seat;
+}
+
+/**
+ * 언레이즈 팟에서 SB의 강제 포스트가 현재 베팅 레벨(bb × 2^straddleCount)을 이미
+ * 채웠는가 — sb===bb(이퀄 블라인드) 게임 등. 상세 엔진의 칩 기준(toCall===0) 판정과
+ * 같은 결론을 내리기 위한 규칙: 추가 칩이 없는 계속은 call이 아니라 check다.
+ */
+function smallBlindCoversUnraisedBet(hand, seat) {
+    const blinds = hand.blinds;
+    const sb = blinds && typeof blinds.sb === 'number' && Number.isFinite(blinds.sb) ? blinds.sb : null;
+    const bb = blinds && typeof blinds.bb === 'number' && Number.isFinite(blinds.bb) ? blinds.bb : null;
+    if (sb === null || bb === null) return false;
+    const unraisedBet = bb * 2 ** (hand.straddleCount || 0);
+    return sb >= unraisedBet && seat === smallBlindSeat(hand.seats, hand.dealerSeat);
+}
+
 /** 파생 상태를 재사용하는 내부 구현 (applyAction에서 이중 리플레이 방지) */
 function legalActionsForDerived(hand, seat, derived) {
     const seatRec = hand.seats.find(s => s.seat === seat);
@@ -224,6 +247,7 @@ function legalActionsForDerived(hand, seat, derived) {
     if (derived.raiseCount === 0) {
         const lastOpt = lastOptionSeat(hand.seats, hand.dealerSeat, hand.straddleCount);
         if (seat === lastOpt) return ['check', 'raise']; // 언레이즈 팟의 lastOption만 체크 가능
+        if (smallBlindCoversUnraisedBet(hand, seat)) return ['check', 'raise'];
         return ['fold', 'call', 'raise'];
     }
     // raiseCount>=1: 어그레서 본인에게는 차례가 돌아오지 않으므로 셀프 리레이즈 원천 불가
@@ -233,7 +257,8 @@ function legalActionsForDerived(hand, seat, derived) {
 /**
  * 해당 좌석의 합법 액션 목록.
  * sittingOut·폴드·핸드종료·차례아님 → [].
- * raiseCount===0: lastOption 좌석 ['check','raise'], 그 외 ['fold','call','raise'].
+ * raiseCount===0: lastOption 좌석과 베팅 레벨을 이미 채운 SB(sb>=bb×2^straddle)는
+ *   ['check','raise'], 그 외 ['fold','call','raise'].
  * raiseCount>=1: ['fold','call','raise'].
  * @param {object} hand HandRecord
  * @param {number} seat

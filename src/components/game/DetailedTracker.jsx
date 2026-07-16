@@ -176,9 +176,10 @@ function allActions(hand) {
     });
 }
 
+// 정밀도 어휘는 schema DETAILED_PRECISIONS 토큰만 흐른다 — 한국어는 표시 라벨만
 function qualityText(quality) {
     if (quality === 'exact') return '정확';
-    if (quality === 'approximate' || quality === 'estimated') return '대략';
+    if (quality === 'estimated') return '대략';
     return '모름';
 }
 
@@ -187,12 +188,12 @@ function playerStackInfo(player) {
     const chips = numberOrNull(player?.stackAmount ?? player?.chips);
     if (chips !== null) return { amount: chips, unit: 'chips', quality: quality || 'exact' };
     const bb = numberOrNull(player?.stackBB);
-    if (bb !== null) return { amount: bb, unit: 'bb', quality: quality || 'approximate' };
+    if (bb !== null) return { amount: bb, unit: 'bb', quality: quality || 'estimated' };
     const generic = numberOrNull(player?.stack);
     if (generic !== null) return {
         amount: generic,
         unit: player?.stackUnit || 'chips',
-        quality: quality || (player?.stackUnit === 'bb' ? 'approximate' : 'exact'),
+        quality: quality || (player?.stackUnit === 'bb' ? 'estimated' : 'exact'),
     };
     return { amount: null, unit: 'chips', quality: 'unknown' };
 }

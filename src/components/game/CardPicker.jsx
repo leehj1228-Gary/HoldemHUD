@@ -1,16 +1,25 @@
 import { useState } from 'react';
+import { CARD_RANKS, CARD_SUITS } from '../../engine/schema.js';
 
-const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
-const SUITS = [
-    { key: 's', symbol: '♠', label: '스페이드', color: '#e5e7eb' },
-    { key: 'h', symbol: '♥', label: '하트', color: '#fb7185' },
-    { key: 'd', symbol: '♦', label: '다이아몬드', color: '#60a5fa' },
-    { key: 'c', symbol: '♣', label: '클로버', color: '#4ade80' },
-];
+// 랭크/수트 어휘(멤버십)는 schema.js에서만 온다 — 여기서는 표시 순서와 표기만 정한다.
+const RANK_DISPLAY_ORDER = 'AKQJT98765432';
+const RANKS = [...CARD_RANKS].sort(
+    (a, b) => RANK_DISPLAY_ORDER.indexOf(a) - RANK_DISPLAY_ORDER.indexOf(b));
+const SUIT_DISPLAY_ORDER = 'shdc';
+const SUIT_PRESENTATION = {
+    s: { symbol: '♠', label: '스페이드', color: '#e5e7eb' },
+    h: { symbol: '♥', label: '하트', color: '#fb7185' },
+    d: { symbol: '♦', label: '다이아몬드', color: '#60a5fa' },
+    c: { symbol: '♣', label: '클로버', color: '#4ade80' },
+};
+const SUITS = [...CARD_SUITS]
+    .sort((a, b) => SUIT_DISPLAY_ORDER.indexOf(a) - SUIT_DISPLAY_ORDER.indexOf(b))
+    .map(key => ({ key, ...(SUIT_PRESENTATION[key] || { symbol: key, label: key, color: '#e5e7eb' }) }));
 
+// 키는 schema DETAILED_PRECISIONS 토큰 그대로 — 한국어는 표시 라벨만
 const QUALITY_LABELS = {
     exact: '정확',
-    approximate: '대략',
+    estimated: '대략',
     unknown: '모름',
 };
 

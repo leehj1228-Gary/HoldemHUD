@@ -11,6 +11,7 @@ import {
     forceFold,
     nextDealerSeat,
 } from '../../src/engine/handEngine.js';
+import { enableDetailedTracking, legalDetailedActions } from '../../src/engine/detailedHandEngine.js';
 
 // ---------------------------------------------------------------------------
 // 헬퍼
@@ -493,6 +494,61 @@ describe('forceFold', () => {
         // 이후 4 콜 → 차례 5
         const h3 = applyAction(h2, 4, 'call');
         expect(deriveHandState(h3).toActSeat).toBe(5);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// 이퀄 블라인드(sb===bb) 체크 권리 — 상세 엔진과의 프리플랍 합의 (E1/E2 단일 규칙)
+// ---------------------------------------------------------------------------
+
+describe('이퀄 블라인드 SB 체크 권리 (칩 기준, 상세 엔진과 합의)', () => {
+    function makeEqualBlindHand({ n = 3, dealerSeat = 0, straddleCount = 0 } = {}) {
+        const seats = makeSeats(n);
+        return createHand({
+            handNo: 1,
+            dealerSeat,
+            straddleCount,
+            blinds: { sb: 2, bb: 2 },
+            seats,
+            positions: positionsForHand(seats, dealerSeat),
+            startedAt: 1000,
+        });
+    }
+
+    it('2/2 게임 SB의 무추가칩 계속은 call이 아니라 check다 (VPIP 모드 간 일치)', () => {
+        // 3인, 딜러 0: SB=1, BB=2, 첫 액션 0(BTN)
+        const hand = play(makeEqualBlindHand(), [[0, 'fold']]);
+        expect(legalActionsFor(hand, 1)).toEqual(['check', 'raise']);
+        const checked = applyAction(hand, 1, 'check');
+        expect(checked).not.toBe(hand);
+        expect(checked.actions.at(-1)).toMatchObject({ seat: 1, type: 'check', position: 'SB' });
+
+        // 같은 구성에서 상세 엔진도 동일 판정 (all-in 명령을 제외하면 같은 목록)
+        const detailed = enableDetailedTracking(hand, { startingStacks: [100, 100, 100], chipUnit: 1 });
+        expect(legalDetailedActions(detailed, 1)).toEqual(['check', 'raise', 'all-in']);
+    });
+
+    it('HU 2/2: 딜러(SB 겸 BTN)의 첫 액션도 check/raise', () => {
+        const hand = makeEqualBlindHand({ n: 2 });
+        expect(legalActionsFor(hand, 0)).toEqual(['check', 'raise']);
+        const detailed = enableDetailedTracking(hand, { startingStacks: [100, 100], chipUnit: 1 });
+        expect(legalDetailedActions(detailed, 0)).toEqual(['check', 'raise', 'all-in']);
+    });
+
+    it('레이즈가 나오면 SB도 평범한 fold/call/raise', () => {
+        const hand = play(makeEqualBlindHand(), [[0, 'raise']]);
+        expect(legalActionsFor(hand, 1)).toEqual(['fold', 'call', 'raise']);
+    });
+
+    it('스트래들이 있으면 SB 포스트(2)가 베팅 레벨(4)에 못 미쳐 체크 불가', () => {
+        // 4인, 딜러 0: SB=1, BB=2, 스트래들=3, 첫 액션 0
+        const hand = play(makeEqualBlindHand({ n: 4, straddleCount: 1 }), [[0, 'fold']]);
+        expect(legalActionsFor(hand, 1)).toEqual(['fold', 'call', 'raise']);
+    });
+
+    it('1/2 게임 SB는 기존대로 fold/call/raise (비회귀)', () => {
+        const hand = play(makeHand({ n: 3 }), [[0, 'fold']]);
+        expect(legalActionsFor(hand, 1)).toEqual(['fold', 'call', 'raise']);
     });
 });
 

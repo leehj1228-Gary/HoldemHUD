@@ -495,3 +495,40 @@ describe('HandRecord v2 postflop compatibility', () => {
         expect(computeAllStats([draft]).get('P3').dealt).toBe(1);
     });
 });
+
+describe('진행 중 상세 핸드 라이브 포함 (includeInProgressDetailed)', () => {
+    function inProgressDetailedHand() {
+        const hand = buildHand({
+            seats: seats6(),
+            actions: [[3, 'raise'], [4, 'call']],
+        });
+        // 라이브 currentHand 형태: 상세 활성 + 미완료 + 포스트플랍 진행분 포함
+        hand.actions.push(
+            { seq: 2, seat: 3, name: 'P3', position: 'UTG', type: 'bet', street: 'flop', raiseLevel: 0 },
+        );
+        hand.detailed = { enabled: true, completed: false };
+        return hand;
+    }
+
+    it('기본값(false): 미완료 상세 핸드(아카이브 드래프트)는 표본에서 제외', () => {
+        expect(computeAllStats([inProgressDetailedHand()]).size).toBe(0);
+    });
+
+    it('true: 진행 중 상세 핸드의 프리플랍 액션이 v1 핸드처럼 dealt/VPIP/PFR에 반영', () => {
+        const stats = computeAllStats([inProgressDetailedHand()], { includeInProgressDetailed: true });
+        expect(stats.get('P3').dealt).toBe(1);
+        expect(ratio(stats.get('P3').vpip)).toEqual({ num: 1, den: 1, pct: 100 });
+        expect(ratio(stats.get('P3').pfr)).toEqual({ num: 1, den: 1, pct: 100 });
+        expect(ratio(stats.get('P4').vpip)).toEqual({ num: 1, den: 1, pct: 100 });
+        // 아직 액션 전인 좌석도 dealt에 포함 — 포스트플랍 액션은 여전히 무시
+        expect(stats.get('P5').dealt).toBe(1);
+        expect(ratio(stats.get('P5').vpip)).toEqual({ num: 0, den: 1, pct: 0 });
+    });
+
+    it('완료된 상세 핸드는 플래그와 무관하게 포함 (기존 동작 유지)', () => {
+        const done = inProgressDetailedHand();
+        done.detailed = { enabled: true, completed: true };
+        expect(computeAllStats([done]).get('P3').pfr.num).toBe(1);
+        expect(computeAllStats([done], { includeInProgressDetailed: true }).get('P3').pfr.num).toBe(1);
+    });
+});

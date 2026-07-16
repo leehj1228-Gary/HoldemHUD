@@ -6,6 +6,7 @@ import {
     createInitialState,
     DEFAULT_BLINDS,
     canDisableDetailedTracking,
+    hasIncompleteDetailedHand,
 } from '../../src/state/gameReducer.js';
 import { deriveHandState, lastOptionSeat } from '../../src/engine/handEngine.js';
 import { deriveDetailedState } from '../../src/engine/detailedHandEngine.js';
@@ -610,6 +611,19 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
         warnSpy.mockRestore();
     });
 
+    it('LOAD_PERSISTED: archive의 null/원시값 항목은 드롭, hands 비배열 레코드는 hands만 []로 복구', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const st = reducer(initialState, {
+            type: 'LOAD_PERSISTED',
+            payload: { archive: [null, 5, { id: 'x', totalHands: 3, startedAt: 7 }] },
+        });
+        // null/5는 보존할 것이 없어 드롭, {id:'x'}는 나머지 필드 보존 + hands []
+        expect(st.archive).toEqual([{ id: 'x', totalHands: 3, startedAt: 7, hands: [] }]);
+        expect(warnSpy).toHaveBeenCalledTimes(1); // 로드당 경고 1회 — 드롭/복구도 개수에 포함
+        expect(warnSpy.mock.calls[0][0]).toContain('3');
+        warnSpy.mockRestore();
+    });
+
     it('LOAD_PERSISTED: seats가 배열이 아닌 세션은 버린다 (session=null)', () => {
         const st = reducer(initialState, {
             type: 'LOAD_PERSISTED',
@@ -877,5 +891,66 @@ describe('detailed hand reducer flow', () => {
         expect(st.archive[0].hands[0].status).toBe('incomplete');
         expect(st.archive[0].totalHands).toBe(0);
         expect(st.archive[0].incompleteHands).toBe(1);
+    });
+
+    it('상세 모드 중 RECORD_ACTION(v1)은 no-op — v2 원장 오염 차단 (참조 유지)', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        // v1 엔진 기준으로는 합법인 액션(차례 좌석의 call)이라도 거부되어야 한다
+        expect(reducer(st, { type: 'RECORD_ACTION', seat: 0, actionType: 'call' })).toBe(st);
+        expect(reducer(st, { type: 'RECORD_ACTION', seat: 0, actionType: 'fold' })).toBe(st);
+        expect(st.session.currentHand.actions).toHaveLength(0);
+    });
+
+    it('갓 활성화한 상세 핸드에서 UNDO는 핸드 경계를 넘는다 (autoNext 해제 포함)', () => {
+        let st = startSession(headsUpConfig);
+        // HU: 딜러 0(SB)이 첫 액션 → 콜, BB 체크로 핸드 1 종료
+        st = record(st, 0, 'call');
+        st = record(st, 1, 'check');
+        st = reducer(st, { type: 'NEXT_HAND', endedAt: 3000 });
+        expect(st.session.hands).toHaveLength(1);
+        expect(st.session.handNo).toBe(2);
+        expect(st.session.dealerSeat).toBe(1);
+
+        // 핸드 2에서 상세 기록만 켜고(액션 0개) 되돌리기
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        expect(st.session.currentHand.detailed.enabled).toBe(true);
+
+        st = reducer(st, { type: 'UNDO' });
+        expect(st.session.hands).toHaveLength(0);
+        expect(st.session.handNo).toBe(1);
+        expect(st.session.dealerSeat).toBe(0);            // 핸드 1의 딜러 복원
+        expect(st.session.currentHand.detailed).toBeUndefined(); // 상세 셸은 빈 핸드처럼 폐기
+        expect(st.session.currentHand.actions).toHaveLength(1);  // BB 체크 제거됨
+        expect(st.session.currentHand.endedAt).toBeNull();
+        expect(st.autoNext.pending).toBe(false);
+    });
+
+    it('되돌릴 것이 없는 갓 활성화 상세 핸드(이전 핸드 없음)는 no-op', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, { type: 'ENABLE_DETAILED_TRACKING', options: { chipUnit: 1 } });
+        expect(reducer(st, { type: 'UNDO' })).toBe(st);
+    });
+
+    it('hasIncompleteDetailedHand: 활성-미완료 상세 핸드에서만 true (다음 핸드 버튼 판정)', () => {
+        expect(hasIncompleteDetailedHand(null)).toBe(false);
+        let st = startSession(headsUpConfig);
+        expect(hasIncompleteDetailedHand(st.session)).toBe(false);
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        expect(hasIncompleteDetailedHand(st.session)).toBe(true);
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 0, actionType: 'fold', options: { precision: 'exact' },
+        });
+        st = reducer(st, { type: 'COMPLETE_DETAILED_HAND', payload: { winners: [] } });
+        expect(hasIncompleteDetailedHand(st.session)).toBe(false);
     });
 });

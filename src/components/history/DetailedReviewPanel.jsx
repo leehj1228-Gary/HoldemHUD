@@ -68,37 +68,24 @@ function actionFromHand(review, hand) {
 }
 
 function reviewAction(review, hand) {
-    const raw = actionFromHand(review, hand)
-        ?? review?.action
-        ?? review?.actualAction?.type
-        ?? review?.decision?.actualAction?.type
-        ?? review?.decision?.action;
-    const type = typeof raw === 'object' ? raw.type : raw;
-    return ACTION_LABELS[type] || stringValue(type, '액션 미상');
+    const raw = actionFromHand(review, hand) ?? review?.decision?.actualAction?.type;
+    return ACTION_LABELS[raw] || stringValue(raw, '액션 미상');
 }
 
-function reviewsFromResult(result) {
-    if (Array.isArray(result)) return result;
-    if (!result || typeof result !== 'object') return [];
-    if (Array.isArray(result.reviews)) return result.reviews;
-    if (Array.isArray(result.results)) return result.results;
-    if (Array.isArray(result.items)) {
-        return result.items.map(item => {
-            if (item?.review) {
-                return {
-                    ...item.review,
-                    decision: item.decision,
-                    dataQuality: item.decision?.dataQuality,
-                };
-            }
-            return item?.assessment ? item : null;
-        }).filter(Boolean);
-    }
-    if (Array.isArray(result.decisions)) {
-        return result.decisions.map(item => item?.review || item?.analysis || item).filter(Boolean);
-    }
-    if (result.review && typeof result.review === 'object') return [result.review];
-    return result.assessment ? [result] : [];
+// analyzeDetailedHand가 반환하는 유일한 검증 통과 형태({items:[{decision, review}]})만
+// 렌더한다. 대체 형태 폴백은 validateDecisionReview를 우회한 미검증 리뷰를 그대로
+// 화면에 올리는 통로가 되므로 금지 — 레거시 형태가 생기면 패널이 아니라 서비스에서
+// 정규화한다. (테스트용 export)
+// eslint-disable-next-line react-refresh/only-export-components
+export function reviewsFromResult(result) {
+    if (!result || typeof result !== 'object' || !Array.isArray(result.items)) return [];
+    return result.items
+        .filter(item => item?.review)
+        .map(item => ({
+            ...item.review,
+            decision: item.decision,
+            dataQuality: item.decision?.dataQuality,
+        }));
 }
 
 function preflightWarnings(hand) {
@@ -116,7 +103,7 @@ function preflightWarnings(hand) {
         (stackPrecisions[seat.seat] ?? stackPrecisions[String(seat.seat)] ?? 'unknown') === 'unknown').length;
     const estimatedStacks = activeSeats.filter(seat => {
         const precision = stackPrecisions[seat.seat] ?? stackPrecisions[String(seat.seat)];
-        return precision === 'estimated' || precision === 'approximate';
+        return precision === 'estimated';
     }).length;
     if (unknownStacks > 0) warnings.push(`시작 스택을 모르는 좌석이 ${unknownStacks}개입니다.`);
     if (estimatedStacks > 0) warnings.push(`시작 스택 ${estimatedStacks}개가 대략값입니다.`);
@@ -126,7 +113,7 @@ function preflightWarnings(hand) {
     const unknownAmounts = amountActions.filter(action =>
         action.precision === 'unknown' || action.amountTo === null || action.amountTo === undefined).length;
     const estimatedAmounts = amountActions.filter(action =>
-        action.precision === 'estimated' || action.precision === 'approximate').length;
+        action.precision === 'estimated').length;
     if (unknownAmounts > 0) warnings.push(`금액을 모르는 액션이 ${unknownAmounts}개입니다.`);
     if (estimatedAmounts > 0) warnings.push(`베팅 금액 ${estimatedAmounts}개가 대략값입니다.`);
     return warnings;
