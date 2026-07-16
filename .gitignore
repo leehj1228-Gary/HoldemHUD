@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist_electron/
+.DS_Store
+.env
+.env.*
+.idea/
+.vscode/
+*.log
+.bkit/
+.claude/settings.local.json
+
+# Android build artifacts
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/release/
+*.keystore
+*.jks
