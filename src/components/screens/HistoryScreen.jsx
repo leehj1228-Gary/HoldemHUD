@@ -130,6 +130,20 @@ const HistoryScreen = () => {
         }
     };
 
+    // 전체 아카이브 JSON 내보내기 — 저장 공간 경고 시 오래된 세션을 지우기 전의 탈출구
+    const handleExport = () => {
+        const date = new Date().toISOString().slice(0, 10);
+        const blob = new Blob([JSON.stringify(archive, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `holdemhud-archive-${date}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    };
+
     const renderHandDetail = () => {
         if (!selectedHand) return null;
 
@@ -289,6 +303,15 @@ const HistoryScreen = () => {
                     {selectedHand ? `Hand #${selectedHand.handNo}` :
                         selectedSession ? 'Session Stats' : 'Session History'}
                 </h2>
+                {!selectedSession && (
+                    <button
+                        className="export-btn"
+                        onClick={handleExport}
+                        disabled={archive.length === 0}
+                    >
+                        내보내기
+                    </button>
+                )}
             </div>
 
             <div className="history-content">
@@ -346,6 +369,19 @@ const HistoryScreen = () => {
                     font-size: 1.2em;
                     cursor: pointer;
                     margin-right: 15px;
+                }
+                .export-btn {
+                    margin-left: auto;
+                    background: #34495e;
+                    border: 1px solid #7f8c8d;
+                    color: #bdc3c7;
+                    padding: 5px 15px;
+                    border-radius: 20px;
+                    cursor: pointer;
+                }
+                .export-btn:disabled {
+                    opacity: 0.4;
+                    cursor: default;
                 }
                 .history-content {
                     flex: 1;

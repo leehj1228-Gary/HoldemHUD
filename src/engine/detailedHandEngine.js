@@ -2,13 +2,15 @@
 // Pure module: no React, DOM, storage, clocks, or mutation.
 
 import { firstToActSeat } from './handEngine.js';
+import {
+    DETAILED_STREETS as STREETS,
+    DETAILED_PRECISIONS as PRECISIONS,
+    MAX_DETAILED_ACTIONS,
+    normalizeCard,
+} from './schema.js';
 
-const STREETS = ['preflop', 'flop', 'turn', 'river'];
-const PRECISIONS = ['exact', 'estimated', 'unknown'];
 const PRECISION_RANK = { exact: 0, estimated: 1, unknown: 2 };
 const CHIP_ACTIONS = new Set(['call', 'bet', 'raise']);
-const RANKS = new Set('23456789TJQKA'.split(''));
-const SUITS = new Set('cdhs'.split(''));
 
 function finiteAmount(value) {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -60,15 +62,6 @@ function normalizeStreet(value) {
 function nextStreet(street) {
     const i = STREETS.indexOf(street);
     return i >= 0 && i < STREETS.length - 1 ? STREETS[i + 1] : null;
-}
-
-function normalizeCard(value) {
-    if (typeof value !== 'string') return null;
-    const raw = value.trim();
-    if (raw.length !== 2) return null;
-    const rank = raw[0].toUpperCase();
-    const suit = raw[1].toLowerCase();
-    return RANKS.has(rank) && SUITS.has(suit) ? `${rank}${suit}` : null;
 }
 
 function normalizeCards(values, expectedLength = null) {
@@ -587,13 +580,17 @@ export function deriveDetailedState(hand) {
             toActPlayer?.streetCommittedPrecision || 'unknown',
         );
     const minBet = finiteAmount(hand.blinds?.bb) ? hand.blinds.bb : null;
+    // NLHE minimum raise: currentBet plus the last full raise size, never less than
+    // currentBet plus a full minimum bet. After a sub-minimum all-in wager
+    // (currentBet < minBet) the legal minimum is therefore "all-in + full min bet"
+    // (Robert's Rules/TDA), matching the replay's own full-raise classification.
     const minRaiseTo = currentBet === 0
         ? minBet
         : (finiteAmount(currentBet) && finiteAmount(currentResult?.lastFullRaiseSize)
             && currentResult?.lastFullRaiseSizeKnown
-            ? (finiteAmount(minBet) && currentBet < minBet
-                ? minBet
-                : currentBet + currentResult.lastFullRaiseSize)
+            ? currentBet + (finiteAmount(minBet)
+                ? Math.max(currentResult.lastFullRaiseSize, minBet)
+                : currentResult.lastFullRaiseSize)
             : null);
 
     return {
@@ -687,6 +684,9 @@ export function applyDetailedAction(hand, seat, type, options = {}) {
     const state = deriveDetailedState(hand);
     const legal = legalDetailedActions(hand, seat);
     if (!legal.includes(type)) return hand;
+    // Producer-side mirror of the persisted-record cap: a ledger the loader would
+    // destroy must never be produced in the first place (standard illegal no-op).
+    if (hand.actions.length >= MAX_DETAILED_ACTIONS) return hand;
     const player = state.playerBySeat.get(seat);
     let precision = normalizePrecision(options.precision, 'exact');
     if (type === 'call') precision = worsePrecision(precision, state.toCallQuality || 'unknown');

@@ -1,8 +1,13 @@
 import { useState } from 'react';
 import BetSizeSheet from './BetSizeSheet';
 import CardPicker from './CardPicker';
+import {
+    DETAILED_STREETS as STREETS,
+    DETAILED_ACTION_TYPES,
+    CARD_RANKS,
+    CARD_SUITS,
+} from '../../engine/schema.js';
 
-const STREETS = ['preflop', 'flop', 'turn', 'river'];
 const STREET_META = {
     preflop: { label: 'Preflop', cardCount: 0 },
     flop: { label: 'Flop', cardCount: 3 },
@@ -10,7 +15,7 @@ const STREET_META = {
     river: { label: 'River', cardCount: 1 },
 };
 const BOARD_STREETS = ['flop', 'turn', 'river'];
-const ACTION_ORDER = ['fold', 'check', 'call', 'bet', 'raise', 'all-in'];
+const ACTION_ORDER = [...DETAILED_ACTION_TYPES, 'all-in'];
 const ACTION_LABELS = {
     fold: 'Fold',
     check: 'Check',
@@ -58,6 +63,8 @@ function formatAmount(value) {
     return new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 }).format(number);
 }
 
+// 관대한 입력 파싱(수트 단어·기호, '10' 표기)은 유지하되,
+// 최종 어휘는 schema.js의 CARD_RANKS/CARD_SUITS로만 판정한다.
 function normalizeSuit(suit) {
     const value = String(suit || '').toLowerCase();
     if (value === '♠' || value.startsWith('spade')) return 's';
@@ -69,13 +76,18 @@ function normalizeSuit(suit) {
 
 function normalizeCard(card) {
     if (!card) return '';
+    let rank = '';
+    let suit = '';
     if (typeof card === 'object') {
-        const rank = String(card.rank || '').toUpperCase().replace('10', 'T');
-        return rank && card.suit ? `${rank}${normalizeSuit(card.suit)}` : '';
+        rank = String(card.rank || '').toUpperCase().replace('10', 'T');
+        suit = normalizeSuit(card.suit);
+    } else {
+        const raw = String(card).trim().replace('10', 'T');
+        if (raw.length < 2) return '';
+        rank = raw.slice(0, -1).toUpperCase();
+        suit = normalizeSuit(raw.slice(-1));
     }
-    const raw = String(card).trim().replace('10', 'T');
-    if (raw.length < 2) return '';
-    return `${raw.slice(0, -1).toUpperCase()}${normalizeSuit(raw.slice(-1))}`;
+    return CARD_RANKS.has(rank) && CARD_SUITS.has(suit) ? `${rank}${suit}` : '';
 }
 
 function normalizeCards(cards) {
@@ -209,9 +221,15 @@ function CardSlots({ cards, count }) {
     );
 }
 
+// 엔진이 액션을 거부(no-op)했을 때 조용히 사라지지 않도록 알린다 (onAction이 false 반환 시)
+const notifyRejectedAction = () => {
+    window.alert('액션이 기록되지 않았습니다 — 금액이 규칙에 맞는지 확인하세요');
+};
+
 const DetailedTracker = ({
     hand,
     derived = {},
+    canDisableDetail = true,
     onAction = () => {},
     onAdvanceStreet = () => {},
     onSetCards = () => {},
@@ -294,6 +312,10 @@ const DetailedTracker = ({
     const potQuality = (useContestablePot ? sidePotState.quality : derived.potQuality) || 'unknown';
     const completionReady = handComplete || (street === 'river' && streetComplete);
     const nextStreet = streetIndex < STREETS.length - 1 ? STREETS[streetIndex + 1] : null;
+    // 리듀서 가드(canDisableDetailedTracking)와 동일 판정을 컨텍스트에서 받아 무시되는 클릭을 없앤다
+    const disableDetailTitle = canDisableDetail
+        ? undefined
+        : '완료됐거나 플랍 기록이 시작된 상세 핸드는 간편 기록으로 되돌릴 수 없습니다';
 
     const legalActions = Array.isArray(derived.legalActions)
         ? [...new Set(derived.legalActions.map(normalizeActionType).filter(type => ACTION_ORDER.includes(type)))]
@@ -416,12 +438,12 @@ const DetailedTracker = ({
             const amountQuality = amount === null
                 ? 'unknown'
                 : (derived.toCallQuality || 'exact');
-            onAction(toActSeat, type, {
+            if (onAction(toActSeat, type, {
                 street,
                 amount,
                 amountUnit: 'chips',
                 amountQuality,
-            });
+            }) === false) notifyRejectedAction();
             return;
         }
 
@@ -431,17 +453,17 @@ const DetailedTracker = ({
                 setSizeSheet({ seat: toActSeat, type: 'all-in' });
                 return;
             }
-            onAction(toActSeat, type, {
+            if (onAction(toActSeat, type, {
                 street,
                 amount: stack.amount,
                 amountUnit: stack.unit,
                 amountQuality: stack.quality,
                 isAllIn: true,
-            });
+            }) === false) notifyRejectedAction();
             return;
         }
 
-        onAction(toActSeat, type, { street });
+        if (onAction(toActSeat, type, { street }) === false) notifyRejectedAction();
     };
 
     const actorStack = playerStackInfo(actor);
@@ -463,7 +485,13 @@ const DetailedTracker = ({
                     <div style={styles.eyebrow}>DETAIL TRACKER</div>
                     <h2 style={styles.heading}>Hand #{hand.handNo ?? '—'}</h2>
                 </div>
-                <button type="button" onClick={onDisableDetail} style={styles.compactButton}>
+                <button
+                    type="button"
+                    onClick={onDisableDetail}
+                    disabled={!canDisableDetail}
+                    title={disableDetailTitle}
+                    style={{ ...styles.compactButton, opacity: canDisableDetail ? 1 : 0.45 }}
+                >
                     간편 기록
                 </button>
             </header>
@@ -731,7 +759,13 @@ const DetailedTracker = ({
                         >
                             상세 기록 완료
                         </button>
-                        <button type="button" onClick={onDisableDetail} style={styles.secondaryButton}>
+                        <button
+                            type="button"
+                            onClick={onDisableDetail}
+                            disabled={!canDisableDetail}
+                            title={disableDetailTitle}
+                            style={{ ...styles.secondaryButton, opacity: canDisableDetail ? 1 : 0.45 }}
+                        >
                             간편 기록으로
                         </button>
                     </div>}
@@ -801,6 +835,7 @@ const DetailedTracker = ({
                     potQuality={potQuality}
                     currentBet={derived.currentBet}
                     toCall={derived.toCall}
+                    minRaiseTo={derived.minRaiseTo}
                     bigBlind={hand.blinds?.bb}
                     playerStack={actorAllInTo}
                     chipUnit={hand.detailed?.chipUnit}
@@ -809,7 +844,7 @@ const DetailedTracker = ({
                     onClose={() => setSizeSheet(null)}
                     onConfirm={(result) => {
                         const actionType = result.source === 'stack' ? 'all-in' : sizeSheet.type;
-                        onAction(sizeSheet.seat, actionType, {
+                        const recorded = onAction(sizeSheet.seat, actionType, {
                             street,
                             amount: result.amount,
                             amountUnit: result.unit,
@@ -818,6 +853,11 @@ const DetailedTracker = ({
                             isAllIn: actionType === 'all-in' || result.source === 'stack',
                             allInKind: result.allInKind,
                         });
+                        if (recorded === false) {
+                            // 엔진 거부 — 성공한 것처럼 시트를 닫지 않는다
+                            notifyRejectedAction();
+                            return;
+                        }
                         setSizeSheet(null);
                     }}
                 />

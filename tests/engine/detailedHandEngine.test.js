@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createHand, createSeat } from '../../src/engine/schema.js';
+import { createHand, createSeat, MAX_DETAILED_ACTIONS } from '../../src/engine/schema.js';
 import { applyAction, positionsForHand } from '../../src/engine/handEngine.js';
 import {
     enableDetailedTracking,
@@ -429,12 +429,83 @@ describe('live edge cases', () => {
 
         const afterShortBet = deriveDetailedState(hand);
         expect(afterShortBet.currentBet).toBe(1);
-        expect(afterShortBet.minRaiseTo).toBe(10);
+        expect(afterShortBet.minRaiseTo).toBe(11);
         expect(afterShortBet.raiseRights[1]).toBe(false);
         expect(legalDetailedActions(hand, 0)).toEqual(['fold', 'call', 'raise', 'all-in']);
 
         hand = applyDetailedAction(hand, 0, 'call');
         expect(legalDetailedActions(hand, 1)).toEqual(['fold', 'call']);
+    });
+
+    it('requires all-in plus a full minimum bet to raise over a sub-minimum all-in bet', () => {
+        // Robert's Rules/TDA: blinds 5/10, flop all-in bet of 1 -> min raise-to is 1 + 10 = 11.
+        let hand = tracked(3, [100, 100, 11], { blinds: { sb: 5, bb: 10 } });
+        hand = applyDetailedAction(hand, 0, 'call');
+        hand = applyDetailedAction(hand, 1, 'call');
+        hand = applyDetailedAction(hand, 2, 'check');
+        hand = advanceDetailedStreet(hand, []);
+        hand = applyDetailedAction(hand, 1, 'check');
+        hand = applyDetailedAction(hand, 2, 'all-in'); // bet 1: below the 10 minimum
+
+        expect(deriveDetailedState(hand).minRaiseTo).toBe(11);
+        expect(applyDetailedAction(hand, 0, 'raise', { amountTo: 10 })).toBe(hand);
+
+        const raised = applyDetailedAction(hand, 0, 'raise', { amountTo: 11 });
+        expect(raised).not.toBe(hand);
+        expect(raised.actions.at(-1)).toMatchObject({ seat: 0, type: 'raise', amountTo: 11 });
+        expect(deriveDetailedState(raised).currentBet).toBe(11);
+    });
+
+    it('posts a straddle as a live blind with straddle-scaled min-raise and option', () => {
+        let hand = tracked(4, [100, 100, 100, 100], { straddleCount: 1 });
+        let state = deriveDetailedState(hand);
+
+        expect(state.forcedPosts).toEqual([
+            { seat: 1, type: 'smallBlind', amount: 1, nominalAmount: 1 },
+            { seat: 2, type: 'bigBlind', amount: 2, nominalAmount: 2 },
+            { seat: 3, type: 'straddle', amount: 4, nominalAmount: 4 },
+        ]);
+        expect(state.pot).toBe(7);
+        expect(state.currentBet).toBe(4);
+        expect(state.toActSeat).toBe(0);
+        expect(state.toCall).toBe(4);
+        expect(state.minRaiseTo).toBe(8); // straddle 4 + last full raise size 4, not bb-based
+        expect(applyDetailedAction(hand, 0, 'raise', { amountTo: 7 })).toBe(hand);
+
+        hand = applyDetailedAction(hand, 0, 'call');
+        hand = applyDetailedAction(hand, 1, 'call');
+        hand = applyDetailedAction(hand, 2, 'call');
+        state = deriveDetailedState(hand);
+        expect(state.toActSeat).toBe(3); // the straddler keeps the option
+        expect(legalDetailedActions(hand, 3)).toEqual(['check', 'raise', 'all-in']);
+    });
+
+    it('reopens raising when cumulative short all-ins add up to a full raise', () => {
+        let hand = tracked(4, [26, 100, 20, 100]);
+        hand = applyDetailedAction(hand, 3, 'call');
+        hand = applyDetailedAction(hand, 0, 'call');
+        hand = applyDetailedAction(hand, 1, 'call');
+        hand = applyDetailedAction(hand, 2, 'check');
+        hand = advanceDetailedStreet(hand, []);
+
+        hand = applyDetailedAction(hand, 1, 'bet', { amountTo: 10 });
+        hand = applyDetailedAction(hand, 2, 'all-in'); // to 18: short raise of 8
+        hand = applyDetailedAction(hand, 3, 'call');
+        hand = applyDetailedAction(hand, 0, 'all-in'); // to 24: short raise of 6
+
+        const state = deriveDetailedState(hand);
+        expect(state.currentBet).toBe(24);
+        expect(state.lastFullRaiseSize).toBe(10);
+        expect(state.minRaiseTo).toBe(34);
+        expect(state.toActSeat).toBe(1);
+        // Seat 1 faces 24 - 10 = 14 >= 10 cumulatively: raising reopens for them...
+        expect(state.raiseRights[1]).toBe(true);
+        expect(legalDetailedActions(hand, 1)).toEqual(['fold', 'call', 'raise', 'all-in']);
+        // ...but seat 3 faces only 24 - 18 = 6 < 10 and stays closed.
+        expect(state.raiseRights[3]).toBe(false);
+
+        hand = applyDetailedAction(hand, 1, 'call');
+        expect(legalDetailedActions(hand, 3)).toEqual(['fold', 'call']);
     });
 
     it('runs the board without forcing a lone chips-behind player to act', () => {
@@ -545,6 +616,34 @@ describe('live edge cases', () => {
         expect(state.currentBetPrecision).toBe('exact');
         expect(state.lastFullRaiseSizeKnown).toBe(false);
         expect(state.minRaiseTo).toBeNull();
+    });
+
+    it('stops appending actions at the persisted ledger cap with an unchanged reference', () => {
+        // Legal alternating unknown-amount raises can grow forever; the producer must
+        // stop at MAX_DETAILED_ACTIONS so the loader never destroys the hand.
+        const unknownRaises = count => Array.from({ length: count }, (_, i) => ({
+            seq: i,
+            seat: i % 2,
+            name: `P${i % 2}`,
+            position: null,
+            type: 'raise',
+            raiseLevel: i + 1,
+            street: 'preflop',
+            amountTo: null,
+            amountAdded: null,
+            precision: 'unknown',
+            isAllIn: false,
+        }));
+        const nearCap = { ...tracked(2, [null, null]), actions: unknownRaises(MAX_DETAILED_ACTIONS - 1) };
+
+        const grown = applyDetailedAction(nearCap, 1, 'raise', { precision: 'unknown' });
+        expect(grown).not.toBe(nearCap);
+        expect(grown.actions).toHaveLength(MAX_DETAILED_ACTIONS);
+
+        // Still seat 0's turn with legal moves, yet every append is refused at the cap.
+        expect(legalDetailedActions(grown, 0)).toContain('raise');
+        expect(applyDetailedAction(grown, 0, 'raise', { precision: 'unknown' })).toBe(grown);
+        expect(applyDetailedAction(grown, 0, 'fold')).toBe(grown);
     });
 
     it('propagates estimated wager precision into calls while preserving exact stacks', () => {

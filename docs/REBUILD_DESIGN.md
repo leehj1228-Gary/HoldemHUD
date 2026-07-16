@@ -55,6 +55,8 @@ HandRecord  = { id, handNo, startedAt, endedAt, dealerSeat, straddleCount, blind
 SessionRecord = { id, schemaVersion, startedAt, endedAt, blinds:{sb,bb}, currency, totalHands, hands:[HandRecord], legacy? }
 ```
 
+- **상세 기록 문법은 schema.js가 유일한 선언처**: `DETAILED_STREETS`·`DETAILED_ACTION_TYPES`·`DETAILED_PRECISIONS`·`CARD_RANKS`·`CARD_SUITS`·`MAX_DETAILED_ACTIONS`와 표준 `normalizeCard`를 export한다. detailedHandEngine·detailedReview·UI는 이를 import해서 쓰고 **재선언 금지** (경계별 엄격성 — 예: 리뷰의 fail-fast — 만 로컬 허용).
+
 ## 3. 핸드 엔진 API (E1: `engine/handEngine.js`) — 전부 순수 함수
 
 ```js

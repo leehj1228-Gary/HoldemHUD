@@ -103,6 +103,7 @@ function BetSizePanel({
     potQuality,
     currentBet,
     toCall,
+    minRaiseTo,
     bigBlind,
     playerStack,
     chipUnit,
@@ -120,7 +121,14 @@ function BetSizePanel({
     const [allInKind, setAllInKind] = useState(requiresAllInKind ? 'call' : null);
     const presets = makePresets({ street, actionType, pot, currentBet, bigBlind, playerStack, chipUnit });
     const amount = asPositiveNumber(amountText);
-    const canConfirm = quality === 'unknown' || amount !== null;
+    // 엔진이 거부할 최소 미달 금액은 확인 전에 차단한다 (숫자 비교만 — 규칙 계산 없음).
+    // 명시적 올인(all-in 액션·스택 프리셋)은 최소 미달이어도 합법(short all-in)이라 검사하지 않는다.
+    const minRequired = (actionType === 'bet' || actionType === 'raise') && source !== 'stack'
+        ? asPositiveNumber(minRaiseTo)
+        : null;
+    const belowMinimum = quality !== 'unknown' && amount !== null
+        && minRequired !== null && amount < minRequired;
+    const canConfirm = (quality === 'unknown' || amount !== null) && !belowMinimum;
     const qualityPrefix = potQuality === 'approximate' || potQuality === 'estimated'
         ? '≈'
         : potQuality === 'unknown' ? '?' : '=';
@@ -199,6 +207,14 @@ function BetSizePanel({
                         />
                     </div>
                 </label>
+
+                {belowMinimum && (
+                    <div role="alert" style={styles.minError}>
+                        {actionType === 'raise'
+                            ? `최소 레이즈는 ${formatAmount(minRequired)}입니다`
+                            : `최소 벳은 ${formatAmount(minRequired)}입니다`}
+                    </div>
+                )}
 
                 {actionType === 'all-in' && requiresAllInKind && (
                     <div style={styles.allInKindSection}>
@@ -288,6 +304,7 @@ const BetSizeSheet = ({
     potQuality = 'unknown',
     currentBet = null,
     toCall = null,
+    minRaiseTo = null,
     bigBlind = null,
     playerStack = null,
     chipUnit = 0.01,
@@ -311,6 +328,7 @@ const BetSizeSheet = ({
             potQuality={potQuality}
             currentBet={currentBet}
             toCall={toCall}
+            minRaiseTo={minRaiseTo}
             bigBlind={bigBlind}
             playerStack={playerStack}
             chipUnit={chipUnit}
@@ -371,6 +389,7 @@ const styles = {
         width: '100%', minHeight: '52px', boxSizing: 'border-box', padding: '10px 14px', border: 0,
         outline: 'none', background: 'transparent', color: '#f8fafc', fontSize: '1.15rem', fontWeight: 900,
     },
+    minError: { marginTop: '8px', color: '#fb7185', fontSize: '0.78rem', fontWeight: 800 },
     qualityRow: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginTop: '14px' },
     allInKindSection: { marginTop: '13px' },
     kindLabel: { color: '#cbd5e1', fontSize: '0.8rem', fontWeight: 800 },

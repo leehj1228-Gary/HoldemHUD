@@ -124,10 +124,25 @@ function withRegeneratedHand(session) {
     return { ...clamped, currentHand: buildCurrentHand(clamped, startedAt) };
 }
 
-/** 진행 중 핸드(액션 1개 이상) 여부 — 구성 변경 액션의 가드 */
-function isMidHand(session) {
+/** 진행 중 핸드(액션 1개 이상) 여부 — 구성 변경 액션의 가드 (컨텍스트도 공유) */
+export function isMidHand(session) {
     return !!(session.currentHand
         && (session.currentHand.actions.length > 0 || session.currentHand.detailed?.enabled));
+}
+
+/**
+ * 상세 추적 해제 가능 여부 — DISABLE_DETAILED_TRACKING 케이스와 컨텍스트가 공유하는
+ * 순수 판정. 완료된 핸드(자동 다음핸드 1.5초 대기 중 포함)나 포스트플랍 진행분이
+ * 있으면 false: 승자·카드·스택이 담긴 레코드를 지우면 안 된다.
+ */
+export function canDisableDetailedTracking(session) {
+    const cur = session?.currentHand;
+    if (!cur?.detailed?.enabled) return false;
+    if (cur.detailed.completed || cur.status === 'complete') return false;
+    if (cur.detailed.street !== 'preflop') return false;
+    if (cur.actions.some(a => a.street && a.street !== 'preflop')) return false;
+    const board = cur.detailed.board || {};
+    return !Object.values(board).some(cards => Array.isArray(cards) && cards.length > 0);
 }
 
 function isCompletedSample(hand) {
@@ -137,6 +152,37 @@ function isCompletedSample(hand) {
 function normalizeLoadedHand(hand) {
     if (hand?.detailed?.enabled) return normalizeDetailedHandRecord(hand);
     return isValidHandRecord(hand) ? hand : null;
+}
+
+/** 격리 대상: 정규화에 실패한 원본 중 보존 가치가 있는 것(객체)만 */
+function shouldQuarantine(raw) {
+    return !!raw && typeof raw === 'object';
+}
+
+/**
+ * 저장된 핸드 배열을 정규화하고, 실패한 원본은 삭제 대신 격리 버킷으로 분리한다.
+ * (설계 §5의 skip-and-log 선례 — 데이터를 조용히 지우지 않는다)
+ */
+function partitionLoadedHands(rawHands) {
+    const hands = [];
+    const quarantined = [];
+    for (const raw of rawHands) {
+        const normalized = normalizeLoadedHand(raw);
+        if (normalized) hands.push(normalized);
+        else if (shouldQuarantine(raw)) quarantined.push(raw);
+    }
+    return { hands, quarantined };
+}
+
+/**
+ * 격리 핸드를 owner(세션 또는 SessionRecord)의 quarantinedHands에 원본 그대로 추가.
+ * 버킷은 비어 있지 않을 때만 존재한다 — 모든 소비자(statsEngine/화면/AI)는 .hands만
+ * 읽으므로 이 필드는 보이지 않는다.
+ */
+function withQuarantine(owner, quarantined) {
+    if (quarantined.length === 0) return owner;
+    const existing = Array.isArray(owner.quarantinedHands) ? owner.quarantinedHands : [];
+    return { ...owner, quarantinedHands: [...existing, ...quarantined] };
 }
 
 /**
@@ -176,14 +222,20 @@ export function reducer(state, action) {
             const payload = action.payload || {};
             const loaded = payload.state && typeof payload.state === 'object' ? payload.state : null;
             let session = loaded && loaded.session ? loaded.session : null;
-            // 방어: 손상된 저장 데이터가 파생 계산(deriveHandState 등)에서 throw하지 않도록 검증
+            // 방어: 손상된 저장 데이터가 파생 계산(deriveHandState 등)에서 throw하지 않도록 검증.
+            // 정규화 실패 핸드는 삭제하지 않고 quarantinedHands에 원본 그대로 격리한다.
+            let quarantinedCount = 0;
             if (session && Array.isArray(session.seats)) {
-                const hands = Array.isArray(session.hands)
-                    ? session.hands.map(normalizeLoadedHand).filter(Boolean)
-                    : [];
-                session = { ...session, hands };
+                const partitioned = partitionLoadedHands(Array.isArray(session.hands) ? session.hands : []);
+                session = withQuarantine({ ...session, hands: partitioned.hands }, partitioned.quarantined);
+                quarantinedCount += partitioned.quarantined.length;
                 const currentHand = normalizeLoadedHand(session.currentHand);
                 if (!currentHand) {
+                    // 복원 불가한 currentHand는 새 핸드로 대체하되 원본은 격리해 보존
+                    if (shouldQuarantine(session.currentHand)) {
+                        session = withQuarantine(session, [session.currentHand]);
+                        quarantinedCount += 1;
+                    }
                     session = withRegeneratedHand({ ...session, currentHand: null });
                 } else {
                     session = { ...session, currentHand };
@@ -192,11 +244,16 @@ export function reducer(state, action) {
                 session = null; // 좌석 배열조차 없는 세션은 복원 불가
             }
             const archive = Array.isArray(payload.archive)
-                ? payload.archive.map(rec =>
-                    rec && typeof rec === 'object' && Array.isArray(rec.hands)
-                        ? { ...rec, hands: rec.hands.map(normalizeLoadedHand).filter(Boolean) }
-                        : rec)
+                ? payload.archive.map(rec => {
+                    if (!rec || typeof rec !== 'object' || !Array.isArray(rec.hands)) return rec;
+                    const partitioned = partitionLoadedHands(rec.hands);
+                    quarantinedCount += partitioned.quarantined.length;
+                    return withQuarantine({ ...rec, hands: partitioned.hands }, partitioned.quarantined);
+                })
                 : state.archive;
+            if (quarantinedCount > 0) {
+                console.warn(`[gameReducer] 복원 불가 핸드 ${quarantinedCount}개를 quarantinedHands로 격리 — 원본 보존, 통계·화면에서는 제외`);
+            }
             return {
                 ...state,
                 session,
@@ -262,6 +319,10 @@ export function reducer(state, action) {
                 incompleteHands: hands.filter(hand => !isCompletedSample(hand)).length,
                 hands,
             };
+            // 라이브 세션의 격리 버킷은 아카이브 레코드로 그대로 이월 (비어 있으면 생략)
+            if (Array.isArray(s.quarantinedHands) && s.quarantinedHands.length > 0) {
+                record.quarantinedHands = s.quarantinedHands;
+            }
             return {
                 ...state,
                 session: null,
@@ -307,11 +368,9 @@ export function reducer(state, action) {
         }
 
         case 'DISABLE_DETAILED_TRACKING': {
-            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            // 완료된 핸드(자동 다음핸드 대기 창 포함)·포스트플랍 진행분은 해제 불가 — no-op
+            if (!state.session || !canDisableDetailedTracking(state.session)) return state;
             const cur = state.session.currentHand;
-            const hasPostflopActions = cur.actions.some(a => a.street && a.street !== 'preflop');
-            const hasBoard = Object.values(cur.detailed.board || {}).some(cards => Array.isArray(cards) && cards.length > 0);
-            if (hasPostflopActions || hasBoard || cur.detailed.street !== 'preflop') return state;
             const quickHand = { ...cur };
             delete quickHand.detailed;
             delete quickHand.schemaVersion;

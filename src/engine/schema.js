@@ -95,16 +95,19 @@ export function isValidHandRecord(hand) {
 // Persisted detailed-hand boundary
 // ---------------------------------------------------------------------------
 
-const DETAILED_STREETS = ['preflop', 'flop', 'turn', 'river'];
-const DETAILED_ACTION_TYPES = ['fold', 'check', 'call', 'bet', 'raise'];
-const DETAILED_PRECISIONS = ['exact', 'estimated', 'unknown'];
-const CARD_RANKS = new Set('23456789TJQKA'.split(''));
-const CARD_SUITS = new Set('cdhs'.split(''));
+// 상세 기록 문법의 유일한 선언처 (docs/REBUILD_DESIGN.md §2).
+// detailedHandEngine / detailedReview / UI는 여기서 import하고 재선언하지 않는다.
+export const DETAILED_STREETS = ['preflop', 'flop', 'turn', 'river'];
+export const DETAILED_ACTION_TYPES = ['fold', 'check', 'call', 'bet', 'raise'];
+export const DETAILED_PRECISIONS = ['exact', 'estimated', 'unknown'];
+export const CARD_RANKS = new Set('23456789TJQKA'.split(''));
+export const CARD_SUITS = new Set('cdhs'.split(''));
 
 // These limits are deliberately much larger than a real Hold'em hand while
 // still preventing a corrupt persisted payload from causing an unbounded replay.
+// The producing engine (applyDetailedAction) refuses to append past the same cap.
 const MAX_DETAILED_SEATS = 10;
-const MAX_DETAILED_ACTIONS = 512;
+export const MAX_DETAILED_ACTIONS = 512;
 const MAX_CHIP_AMOUNT = Number.MAX_SAFE_INTEGER / (MAX_DETAILED_ACTIONS + 16);
 
 function isRecord(value) {
@@ -118,7 +121,8 @@ function safeChipAmount(value, { nullable = true, positive = false } = {}) {
     return value <= MAX_CHIP_AMOUNT ? value : undefined;
 }
 
-function normalizePersistedCard(value) {
+// 표준 카드 정규화: 'as' → 'As', 잘못된 카드는 null. 문법의 유일한 구현체.
+export function normalizeCard(value) {
     if (typeof value !== 'string') return null;
     const raw = value.trim();
     if (raw.length !== 2) return null;
@@ -130,7 +134,7 @@ function normalizePersistedCard(value) {
 function normalizePersistedCards(value, allowedLengths) {
     if (!Array.isArray(value) || !allowedLengths.includes(value.length)) return null;
     // Array.from materializes sparse slots so a hole cannot evade Array#every.
-    const cards = Array.from(value, normalizePersistedCard);
+    const cards = Array.from(value, normalizeCard);
     return cards.every(Boolean) ? cards : null;
 }
 

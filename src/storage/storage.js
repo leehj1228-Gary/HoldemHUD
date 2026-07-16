@@ -11,6 +11,11 @@ export const ARCHIVE_KEY = 'hh:v1:archive';
 // setItem 1회로 커밋한다. ARCHIVE_KEY는 구 split 포맷을 읽기 위한 호환 키다.
 export const PERSISTENCE_ENVELOPE_VERSION = 1;
 
+// 저장 크기 경고 임계값 (바이트). localStorage는 UTF-16으로 저장하므로
+// 문자열 길이 × 2로 근사한다. 초과 시 savePersisted가 console.warn을 남기고,
+// GameContext가 내보내기/삭제를 안내하는 alert를 1회 띄운다.
+export const PERSISTED_SIZE_WARN_BYTES = 4 * 1024 * 1024;
+
 // 구 버전(v33) 키 전체 목록 — resetAllData에서 함께 삭제, 마이그레이션에서 읽기만 함
 export const LEGACY_KEYS = {
     PLAYERS: 'poker_players_v33',
@@ -77,17 +82,22 @@ function safeParseJSON(key, defaultValue) {
     }
 }
 
-function safeSetJSON(key, value) {
+function safeSetString(key, serialized) {
     const storage = getStorage();
     if (!storage) return false;
     try {
-        storage.setItem(key, JSON.stringify(value));
+        storage.setItem(key, serialized);
         return true;
     } catch (e) {
         // QuotaExceededError 포함 — 흡수하고 boolean으로 알림
         console.error(`[storage] ${key} 저장 실패:`, e);
         return false;
     }
+}
+
+// localStorage는 문자열을 UTF-16으로 저장한다 — 코드 유닛당 2바이트로 근사
+function utf16ByteSize(serialized) {
+    return typeof serialized === 'string' ? serialized.length * 2 : 0;
 }
 
 function isObject(value) {
@@ -170,18 +180,44 @@ export function loadPersisted() {
 /**
  * 상태 원자와 아카이브를 단일 envelope로 저장한다. localStorage.setItem 1회가
  * 성공해야만 둘 다 새 스냅샷으로 보이므로 END_SESSION 중간 상태가 남지 않는다.
+ * 직렬화된 envelope 크기를 함께 반환하고, 경고 임계(4MB) 초과 시 console.warn.
  * @param {{state: object|null, archive: Array}} snapshot
- * @returns {boolean} 저장 성공 여부
+ * @returns {{ok: boolean, bytes: number}} 저장 성공 여부 + envelope 크기(바이트)
  */
 export function savePersisted(snapshot) {
     const state = normalizeStateAtom(snapshot?.state);
     const archive = Array.isArray(snapshot?.archive) ? snapshot.archive : [];
-    return safeSetJSON(STATE_KEY, {
-        persistenceEnvelopeVersion: PERSISTENCE_ENVELOPE_VERSION,
-        schemaVersion: SCHEMA_VERSION,
-        state,
-        archive,
-    });
+    let serialized;
+    try {
+        serialized = JSON.stringify({
+            persistenceEnvelopeVersion: PERSISTENCE_ENVELOPE_VERSION,
+            schemaVersion: SCHEMA_VERSION,
+            state,
+            archive,
+        });
+    } catch (e) {
+        // 순환 참조 등 직렬화 자체 실패 — 흡수하고 실패로 알림
+        console.error(`[storage] ${STATE_KEY} 직렬화 실패:`, e);
+        return { ok: false, bytes: 0 };
+    }
+    const bytes = utf16ByteSize(serialized);
+    if (bytes > PERSISTED_SIZE_WARN_BYTES) {
+        console.warn(`[storage] 저장 데이터 ${(bytes / (1024 * 1024)).toFixed(1)}MB — 경고 임계 4MB 초과`);
+    }
+    return { ok: safeSetString(STATE_KEY, serialized), bytes };
+}
+
+/**
+ * 현재 저장된 envelope 크기 정보 (저장 없이 조회).
+ * @returns {{bytes: number, warnThresholdBytes: number, exceedsWarnThreshold: boolean}}
+ */
+export function getPersistedSizeInfo() {
+    const bytes = utf16ByteSize(safeGetItem(STATE_KEY));
+    return {
+        bytes,
+        warnThresholdBytes: PERSISTED_SIZE_WARN_BYTES,
+        exceedsWarnThreshold: bytes > PERSISTED_SIZE_WARN_BYTES,
+    };
 }
 
 /**
@@ -193,7 +229,7 @@ export function savePersisted(snapshot) {
 export function savePersistedState(partialAtom) {
     const payload = { schemaVersion: SCHEMA_VERSION, ...(partialAtom || {}) };
     const current = readV1Snapshot();
-    return savePersisted({ state: payload, archive: current.archive });
+    return savePersisted({ state: payload, archive: current.archive }).ok;
 }
 
 /**
@@ -203,7 +239,7 @@ export function savePersistedState(partialAtom) {
  */
 export function saveArchive(archive) {
     const current = readV1Snapshot();
-    return savePersisted({ state: current.state, archive });
+    return savePersisted({ state: current.state, archive }).ok;
 }
 
 /**

@@ -2,15 +2,27 @@
 // useReducer + 영속화 이펙트 + 자동 다음핸드 타이머. 화면은 useGame()만 사용한다.
 
 import React, { createContext, useContext, useReducer, useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { reducer, initialState } from './gameReducer.js';
+import {
+    reducer,
+    initialState,
+    isMidHand as isMidHandForSession,
+    canDisableDetailedTracking,
+} from './gameReducer.js';
 import { deriveHandState, legalActionsFor as engineLegalActionsFor } from '../engine/handEngine.js';
 import {
     deriveDetailedState,
     legalDetailedActions,
     deriveSidePots,
+    applyDetailedAction,
+    chipUnitForBlinds,
 } from '../engine/detailedHandEngine.js';
 import { computeAllStats } from '../engine/statsEngine.js';
-import { loadPersisted, savePersisted, resetAllData as storageResetAllData } from '../storage/storage.js';
+import {
+    loadPersisted,
+    savePersisted,
+    resetAllData as storageResetAllData,
+    PERSISTED_SIZE_WARN_BYTES,
+} from '../storage/storage.js';
 
 const GameContext = createContext(null);
 
@@ -32,15 +44,25 @@ export function GameProvider({ children }) {
         setHydrated(true);
     }, []);
 
-    // 저장 실패 알림: 앱 실행당 alert 1회, 로그는 매번 (quota 초과 등)
+    // 저장 실패 알림: 앱 실행당 alert 1회, 로그는 매번 (quota 초과 등).
+    // 저장 크기 경고: 임계(4MB) 최초 초과 시 앱 실행당 alert 1회 — 내보내기/삭제 유도.
     const saveFailAlertedRef = useRef(false);
-    const reportSaveFailure = useCallback((ok) => {
-        if (ok) return;
-        console.error('[GameContext] 저장 실패 — 저장 공간 부족 가능성');
-        if (!saveFailAlertedRef.current) {
-            saveFailAlertedRef.current = true;
+    const sizeWarnAlertedRef = useRef(false);
+    const reportSaveResult = useCallback((result) => {
+        if (!result.ok) {
+            console.error('[GameContext] 저장 실패 — 저장 공간 부족 가능성');
+            if (!saveFailAlertedRef.current) {
+                saveFailAlertedRef.current = true;
+                if (typeof globalThis.alert === 'function') {
+                    globalThis.alert('저장 실패: 저장 공간이 부족할 수 있습니다');
+                }
+            }
+            return;
+        }
+        if (result.bytes > PERSISTED_SIZE_WARN_BYTES && !sizeWarnAlertedRef.current) {
+            sizeWarnAlertedRef.current = true;
             if (typeof globalThis.alert === 'function') {
-                globalThis.alert('저장 실패: 저장 공간이 부족할 수 있습니다');
+                globalThis.alert('저장 데이터가 커지고 있습니다. 히스토리에서 오래된 세션을 내보내기 후 삭제하세요.');
             }
         }
     }, []);
@@ -65,16 +87,16 @@ export function GameProvider({ children }) {
         prevArchiveRef.current = archive;
         if (identityChanged || archiveChanged) {
             pendingSaveRef.current.dirty = false;
-            reportSaveFailure(savePersisted({ state: stateAtom, archive }));
+            reportSaveResult(savePersisted({ state: stateAtom, archive }));
             return undefined;
         }
 
         const timer = setTimeout(() => {
             pendingSaveRef.current.dirty = false;
-            reportSaveFailure(savePersisted({ state: stateAtom, archive }));
+            reportSaveResult(savePersisted({ state: stateAtom, archive }));
         }, 300);
         return () => clearTimeout(timer);
-    }, [hydrated, session, roster, settings, archive, reportSaveFailure]);
+    }, [hydrated, session, roster, settings, archive, reportSaveResult]);
 
     // 페이지 이탈 시 디바운스 대기 중인 envelope를 동기 플러시
     useEffect(() => {
@@ -82,7 +104,7 @@ export function GameProvider({ children }) {
             const p = pendingSaveRef.current;
             if (!p.dirty) return;
             p.dirty = false;
-            reportSaveFailure(savePersisted({ state: p.state, archive: p.archive }));
+            reportSaveResult(savePersisted({ state: p.state, archive: p.archive }));
         };
         const onVisibilityChange = () => {
             if (document.visibilityState === 'hidden') flush();
@@ -93,7 +115,7 @@ export function GameProvider({ children }) {
             window.removeEventListener('pagehide', flush);
             document.removeEventListener('visibilitychange', onVisibilityChange);
         };
-    }, [reportSaveFailure]);
+    }, [reportSaveResult]);
 
     // 자동 다음핸드 타이머: pending이 true가 되면 1500ms 후 발화.
     // 리듀서가 멱등(AUTO_NEXT_FIRED는 pending일 때만 적용)이라 stale closure 문제가 없다.
@@ -162,6 +184,14 @@ export function GameProvider({ children }) {
     const playerStats = useMemo(
         () => computeAllStats(currentHand ? [...sessionHands, currentHand] : sessionHands),
         [sessionHands, currentHand]);
+    // 상세 UI가 쓰는 칩 단위 — 화면이 엔진을 직접 import하지 않도록 컨텍스트에서 계산.
+    // 상세 추적 중이면 핸드에 동결된 단위를, 아니면 블라인드에서 유도한 단위를 쓴다.
+    const chipUnit = useMemo(() => {
+        const detailedUnit = currentHand?.detailed?.enabled ? currentHand.detailed.chipUnit : null;
+        return typeof detailedUnit === 'number' && Number.isFinite(detailedUnit) && detailedUnit > 0
+            ? detailedUnit
+            : chipUnitForBlinds(session ? session.blinds : null);
+    }, [currentHand, session]);
     const legalActionsFor = useCallback(
         (seat) => {
             if (!currentHand) return [];
@@ -181,9 +211,14 @@ export function GameProvider({ children }) {
         recordAction: (seat, actionType) => dispatch({ type: 'RECORD_ACTION', seat, actionType }),
         enableDetailedTracking: (options) => dispatch({ type: 'ENABLE_DETAILED_TRACKING', options }),
         disableDetailedTracking: () => dispatch({ type: 'DISABLE_DETAILED_TRACKING' }),
-        recordDetailedAction: (seat, actionType, options) => dispatch({
-            type: 'RECORD_DETAILED_ACTION', seat, actionType, options,
-        }),
+        // 리듀서와 같은 엔진 호출로 no-op 여부를 선판정해 boolean 반환 — UI가 거부 피드백을 줄 수 있다
+        recordDetailedAction: (seat, actionType, options) => {
+            const cur = stateRef.current.session?.currentHand;
+            if (!cur?.detailed?.enabled) return false;
+            if (applyDetailedAction(cur, seat, actionType, options || {}) === cur) return false;
+            dispatch({ type: 'RECORD_DETAILED_ACTION', seat, actionType, options });
+            return true;
+        },
         advanceDetailedStreet: (cards) => dispatch({ type: 'ADVANCE_DETAILED_STREET', cards }),
         setDetailedCards: (payload) => dispatch({ type: 'SET_DETAILED_CARDS', payload }),
         completeDetailedHand: (payload) => dispatch({ type: 'COMPLETE_DETAILED_HAND', payload }),
@@ -216,6 +251,9 @@ export function GameProvider({ children }) {
         handNo: session ? session.handNo : 0,
         currentHand,
         isDetailed,
+        isMidHand: session ? isMidHandForSession(session) : false,
+        canDisableDetailed: canDisableDetailedTracking(session),
+        chipUnit,
         derived,
         positions,
         legalActionsFor,

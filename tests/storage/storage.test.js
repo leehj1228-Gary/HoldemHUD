@@ -4,7 +4,9 @@ import {
     STATE_KEY,
     ARCHIVE_KEY,
     PERSISTENCE_ENVELOPE_VERSION,
+    PERSISTED_SIZE_WARN_BYTES,
     LEGACY_KEYS,
+    getPersistedSizeInfo,
     setStorageAdapter,
     loadPersisted,
     savePersisted,
@@ -151,7 +153,9 @@ describe('v1 roundtrip', () => {
         const archive = [{ id: 'ended', schemaVersion: 1, totalHands: 4, hands: [] }];
         const setSpy = vi.spyOn(mem, 'setItem');
 
-        expect(savePersisted({ state: atom, archive })).toBe(true);
+        const result = savePersisted({ state: atom, archive });
+        expect(result.ok).toBe(true);
+        expect(result.bytes).toBe(mem.getItem(STATE_KEY).length * 2); // UTF-16 근사
 
         expect(setSpy).toHaveBeenCalledTimes(1);
         expect(setSpy).toHaveBeenCalledWith(STATE_KEY, expect.any(String));
@@ -231,7 +235,7 @@ describe('quota error swallowed', () => {
             },
             archive: [{ id: 'previous-session', hands: [] }],
         };
-        expect(savePersisted(activeSnapshot)).toBe(true);
+        expect(savePersisted(activeSnapshot).ok).toBe(true);
         const previousRaw = mem.getItem(STATE_KEY);
 
         setStorageAdapter({
@@ -242,7 +246,7 @@ describe('quota error swallowed', () => {
         expect(savePersisted({
             state: { ...activeSnapshot.state, session: null },
             archive: [...activeSnapshot.archive, { id: 'active-session', hands: [] }],
-        })).toBe(false);
+        }).ok).toBe(false);
         expect(mem.getItem(STATE_KEY)).toBe(previousRaw);
 
         setStorageAdapter(mem);
@@ -251,6 +255,49 @@ describe('quota error swallowed', () => {
             archive: activeSnapshot.archive,
         });
         expect(errSpy).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ── 2.5. 저장 크기 텔레메트리 ───────────────────────────────────────
+describe('persisted size telemetry', () => {
+    it('savePersisted는 직렬화된 envelope 크기(바이트)를 반환한다', () => {
+        const result = savePersisted({
+            state: { session: null, roster: ['A'], settings: {} },
+            archive: [],
+        });
+        expect(result.ok).toBe(true);
+        expect(result.bytes).toBe(mem.getItem(STATE_KEY).length * 2);
+
+        const info = getPersistedSizeInfo();
+        expect(info.bytes).toBe(result.bytes);
+        expect(info.warnThresholdBytes).toBe(PERSISTED_SIZE_WARN_BYTES);
+        expect(info.exceedsWarnThreshold).toBe(false);
+    });
+
+    it('경고 임계(4MB) 초과 시 console.warn을 남긴다', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        // UTF-16 기준 문자당 2바이트 — 2.5M 문자 ≈ 5MB로 임계 초과
+        const bigArchive = [{ id: 'big', hands: [], note: 'x'.repeat(2.5 * 1024 * 1024) }];
+        const result = savePersisted({
+            state: { session: null, roster: [], settings: {} },
+            archive: bigArchive,
+        });
+        expect(result.ok).toBe(true);
+        expect(result.bytes).toBeGreaterThan(PERSISTED_SIZE_WARN_BYTES);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(getPersistedSizeInfo().exceedsWarnThreshold).toBe(true);
+    });
+
+    it('저장 실패여도 측정된 크기는 반환한다', () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+        setStorageAdapter({
+            getItem: () => null,
+            setItem: () => { throw new DOMException('quota', 'QuotaExceededError'); },
+            removeItem: () => {},
+        });
+        const result = savePersisted({ state: { session: null }, archive: [] });
+        expect(result.ok).toBe(false);
+        expect(result.bytes).toBeGreaterThan(0);
     });
 });
 

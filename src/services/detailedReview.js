@@ -3,13 +3,18 @@
 // and validates heuristic (no solver/equity) responses.
 
 import { deriveDetailedState, legalDetailedActions } from '../engine/detailedHandEngine.js';
+import {
+    DETAILED_STREETS as STREETS,
+    DETAILED_ACTION_TYPES as RECORDED_ACTIONS,
+    DETAILED_PRECISIONS as PRECISIONS,
+    normalizeCard as canonicalCard,
+} from '../engine/schema.js';
 
 const PAYLOAD_SCHEMA_VERSION = 'detailed-review-payload.v1';
 const REVIEW_SCHEMA_VERSION = 'heuristic-decision-review.v1';
 const ANALYSIS_MODE = 'heuristic_no_solver';
 const CONFIDENCE_CAP = 0.45;
 
-const STREETS = ['preflop', 'flop', 'turn', 'river'];
 const STREET_BOARD_COUNTS = { preflop: 0, flop: 3, turn: 4, river: 5 };
 const STREET_ALLOWED_VISIBLE_COUNTS = {
     preflop: [0],
@@ -17,11 +22,8 @@ const STREET_ALLOWED_VISIBLE_COUNTS = {
     turn: [0, 1, 3, 4],
     river: [0, 1, 2, 3, 4, 5],
 };
-const RECORDED_ACTIONS = ['fold', 'check', 'call', 'bet', 'raise'];
 const LEGAL_ACTIONS = [...RECORDED_ACTIONS, 'all-in'];
-const PRECISIONS = ['exact', 'estimated', 'unknown'];
 const ASSESSMENTS = ['plausible', 'review_needed', 'not_gradable'];
-const CARD_PATTERN = /^[2-9TJQKA][cdhs]$/;
 const HANGUL_PATTERN = /[가-힣]/;
 const FORBIDDEN_PROSE_PATTERN = /\b(?:gto|equity|ev|ev\s*loss|expected\s+value|solver)\b|에쿼티|기대값|솔버|지티오|명백한\s*실수|정답|오답|최적(?:이다|입니다|임)?/i;
 const STATIC_FACT_REFS = new Set([
@@ -107,11 +109,12 @@ function normalizeStreet(value, path) {
     return requireEnum(value.toLowerCase(), STREETS, path);
 }
 
+// Boundary-specific strictness: same vocabulary as schema.normalizeCard, but
+// invalid input fails the whole payload instead of degrading to null.
 function normalizeCard(value, path) {
     if (typeof value !== 'string') fail(path, 'card string required');
-    const raw = value.trim();
-    const card = raw.length === 2 ? `${raw[0].toUpperCase()}${raw[1].toLowerCase()}` : raw;
-    if (!CARD_PATTERN.test(card)) fail(path, 'canonical card required (for example Ah)');
+    const card = canonicalCard(value);
+    if (!card) fail(path, 'canonical card required (for example Ah)');
     return card;
 }
 

@@ -1,6 +1,12 @@
 // gameReducer 테스트 (docs/REBUILD_DESIGN.md §6, §9) — 순수 리듀서만 검증 (storage 미사용)
-import { describe, it, expect } from 'vitest';
-import { reducer, initialState, createInitialState, DEFAULT_BLINDS } from '../../src/state/gameReducer.js';
+import { describe, it, expect, vi } from 'vitest';
+import {
+    reducer,
+    initialState,
+    createInitialState,
+    DEFAULT_BLINDS,
+    canDisableDetailedTracking,
+} from '../../src/state/gameReducer.js';
 import { deriveHandState, lastOptionSeat } from '../../src/engine/handEngine.js';
 import { deriveDetailedState } from '../../src/engine/detailedHandEngine.js';
 import { isValidHandRecord } from '../../src/engine/schema.js';
@@ -567,7 +573,8 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
         expect(st.archive).toHaveLength(1);
     });
 
-    it('LOAD_PERSISTED: 손상된 currentHand는 재생성, 손상된 hands·archive 핸드는 걸러낸다', () => {
+    it('LOAD_PERSISTED: 손상된 currentHand는 재생성, 손상된 hands·archive 핸드는 격리한다', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const seats = [
             { seat: 0, name: 'A', sittingOut: false },
             { seat: 1, name: 'B', sittingOut: false },
@@ -588,13 +595,19 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
                 archive: [{ id: 'a1', hands: [goodHand, 42, { bad: 1 }] }],
             },
         });
-        expect(st.session.hands).toEqual([goodHand]); // 손상 레코드 제거
+        expect(st.session.hands).toEqual([goodHand]); // 손상 레코드는 hands에서 제외
+        // 삭제 대신 격리: 객체 원본은 quarantinedHands에 그대로 보존 (null·숫자는 보존 가치 없음)
+        expect(st.session.quarantinedHands).toEqual([{ corrupted: true }, { seats: 'garbage' }]);
         expect(isValidHandRecord(st.session.currentHand)).toBe(true); // 재생성됨
         expect(st.session.currentHand.handNo).toBe(2);
         expect(st.session.currentHand.actions).toEqual([]);
         expect(st.archive[0].hands).toEqual([goodHand]);
+        expect(st.archive[0].quarantinedHands).toEqual([{ bad: 1 }]);
+        expect(warnSpy).toHaveBeenCalledTimes(1); // 로드당 경고 1회 (개수 포함)
+        expect(warnSpy.mock.calls[0][0]).toContain('3');
         // 재생성된 핸드는 파생 계산에서 throw하지 않는다
         expect(() => deriveHandState(st.session.currentHand)).not.toThrow();
+        warnSpy.mockRestore();
     });
 
     it('LOAD_PERSISTED: seats가 배열이 아닌 세션은 버린다 (session=null)', () => {
@@ -606,6 +619,7 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
     });
 
     it('LOAD_PERSISTED: malformed detailed data is quarantined before replay', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         let saved = startSession({
             playerCount: 2,
             blinds: { sb: 1, bb: 2 },
@@ -631,7 +645,61 @@ describe('LOAD_PERSISTED / RESET_ALL', () => {
         expect(loaded.session.currentHand.detailed).toBeUndefined();
         expect(isValidHandRecord(loaded.session.currentHand)).toBe(true);
         expect(loaded.archive[0].hands).toEqual([]);
+        // 원본은 삭제되지 않고 격리 버킷에 보존된다
+        expect(loaded.session.quarantinedHands).toEqual([broken]);
+        expect(loaded.archive[0].quarantinedHands).toEqual([broken]);
         expect(() => deriveHandState(loaded.session.currentHand)).not.toThrow();
+        warnSpy.mockRestore();
+    });
+
+    it('LOAD_PERSISTED: 격리 버킷은 저장/로드 왕복에서 보존되고 END_SESSION으로 이월된다', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        let saved = startSession({
+            playerCount: 2,
+            blinds: { sb: 1, bb: 2 },
+            currency: '$',
+            startedAt: 1000,
+            seatNames: ['Hero', 'Villain'],
+        });
+        saved = reducer(saved, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        const broken = JSON.parse(JSON.stringify(saved.session.currentHand));
+        broken.detailed.reveals = [{ seat: 1, cards: null }];
+
+        const loaded = reducer(initialState, {
+            type: 'LOAD_PERSISTED',
+            payload: {
+                state: { session: { ...saved.session, hands: [broken], currentHand: null } },
+                archive: [{ id: 'archived', hands: [broken] }],
+            },
+        });
+        expect(loaded.session.hands).toEqual([]);
+        expect(loaded.session.quarantinedHands).toEqual([broken]);
+        expect(loaded.archive[0].quarantinedHands).toEqual([broken]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+
+        // 저장/로드 왕복 (영속화는 세션·아카이브를 JSON 그대로 직렬화) — 버킷 보존, 중복 격리 없음
+        const reloaded = reducer(initialState, {
+            type: 'LOAD_PERSISTED',
+            payload: JSON.parse(JSON.stringify({
+                state: { session: loaded.session, roster: [], settings: {} },
+                archive: loaded.archive,
+            })),
+        });
+        expect(reloaded.session.quarantinedHands).toEqual([broken]);
+        expect(reloaded.archive[0].quarantinedHands).toEqual([broken]);
+        expect(reloaded.archive[0].hands).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledTimes(1); // 재로드에서는 새 격리 없음 → 추가 경고 없음
+
+        // END_SESSION: 라이브 세션의 버킷이 아카이브 레코드로 그대로 이월
+        const ended = reducer(reloaded, { type: 'END_SESSION', endedAt: 9000 });
+        const record = ended.archive[ended.archive.length - 1];
+        expect(record.quarantinedHands).toEqual([broken]);
+        expect(record.hands).toEqual([]);
+        expect(record.totalHands).toBe(0);
+        warnSpy.mockRestore();
     });
 
     it('RESET_ALL은 초기 상태를 반환한다 (리듀서는 순수 — 스토리지 삭제는 컨텍스트 몫)', () => {
@@ -709,9 +777,29 @@ describe('detailed hand reducer flow', () => {
     it('can return to quick mode before any postflop detail is captured', () => {
         let st = startSession(headsUpConfig);
         st = reducer(st, { type: 'ENABLE_DETAILED_TRACKING', options: { chipUnit: 1 } });
+        expect(canDisableDetailedTracking(st.session)).toBe(true);
         st = reducer(st, { type: 'DISABLE_DETAILED_TRACKING' });
         expect(st.session.currentHand.detailed).toBeUndefined();
         expect(st.session.currentHand.captureLevel).toBeUndefined();
+    });
+
+    it('완료된 프리플랍 상세 핸드는 DISABLE_DETAILED_TRACKING이 no-op (자동 다음핸드 대기 창 보존)', () => {
+        let st = startSession(headsUpConfig);
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: { heroSeat: 0, startingStacks: { 0: 100, 1: 100 }, chipUnit: 1 },
+        });
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 0, actionType: 'fold', options: { precision: 'exact' },
+        });
+        st = reducer(st, { type: 'COMPLETE_DETAILED_HAND', payload: { winners: [] } });
+        expect(st.session.currentHand.detailed.completed).toBe(true);
+        expect(st.autoNext.pending).toBe(true); // 1.5초 자동 다음핸드 대기 창
+
+        // 완료 레코드(승자·카드·스택)를 벗겨내면 안 된다 — 참조 그대로 no-op
+        expect(canDisableDetailedTracking(st.session)).toBe(false);
+        expect(reducer(st, { type: 'DISABLE_DETAILED_TRACKING' })).toBe(st);
+        expect(st.session.currentHand.detailed.winners).toEqual([{ seat: 1, potIndex: null }]);
     });
 
     it('freezes table configuration as soon as detailed setup starts', () => {
