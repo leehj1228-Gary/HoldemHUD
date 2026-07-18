@@ -1,7 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../state/GameContext.jsx';
 import { computeAllStats } from '../../engine/statsEngine.js';
+import { deriveSidePots } from '../../engine/detailedHandEngine.js';
+import { determineShowdownWinners } from '../../engine/handEvaluator.js';
+import { applyArchivedHandPatch } from '../../state/gameReducer.js';
 import DetailedReviewPanel from '../history/DetailedReviewPanel.jsx';
+import DetailedHandEditor from '../history/DetailedHandEditor.jsx';
 
 const formatDate = (value) => {
     if (value === null || value === undefined || value === '') return '-';
@@ -79,10 +83,11 @@ const StatBox = ({ label, stat }) => (
 );
 
 const HistoryScreen = () => {
-    const { archive, deleteArchivedSession, goBack, settings } = useGame();
+    const { archive, deleteArchivedSession, goBack, settings, updateArchivedHand } = useGame();
     const [selectedSessionId, setSelectedSessionId] = useState(null);
     const [viewMode, setViewMode] = useState('stats'); // 'stats' or 'hands'
     const [selectedHand, setSelectedHand] = useState(null);
+    const [editingHand, setEditingHand] = useState(null);
 
     const selectedSession = useMemo(
         () => archive.find(s => s.id === selectedSessionId) || null,
@@ -152,6 +157,14 @@ const HistoryScreen = () => {
         const winners = Array.isArray(detailed?.winners) ? detailed.winners : [];
         const seatName = seat => selectedHand.seats?.find(player => player.seat === seat)?.name
             || `Seat ${Number(seat) + 1}`;
+        const sidePots = detailed ? deriveSidePots(selectedHand) : null;
+        const judge = detailed ? determineShowdownWinners(selectedHand) : null;
+        const potWinnerNames = (pot) => {
+            const names = [...new Set(winners
+                .filter(winner => winner.potIndex === null || winner.potIndex === pot.index)
+                .map(winner => seatName(winner.seat)))];
+            return names.length > 0 ? names.join(', ') : '미기록';
+        };
 
         return (
             <div className="hand-detail-view">
@@ -159,18 +172,41 @@ const HistoryScreen = () => {
                     <h3>Hand #{selectedHand.handNo}</h3>
                     <p>{formatDate(selectedHand.startedAt)}</p>
                     {detailed && <span className="detail-capture-badge">DETAILED · {detailed.completed ? 'COMPLETE' : 'INCOMPLETE'}</span>}
+                    {detailed && (
+                        <button
+                            type="button"
+                            className="hand-edit-button"
+                            onClick={() => setEditingHand(selectedHand)}
+                        >
+                            ✏️ 카드·승자 수정
+                        </button>
+                    )}
                 </div>
                 <div className="action-log">
                     {detailed && (
                         <div className="detailed-hand-summary">
                             <div><strong>Hero</strong> {detailed.heroSeat === null || detailed.heroSeat === undefined ? '미지정' : seatName(detailed.heroSeat)}</div>
-                            <div><strong>Cards</strong> {formatCards(detailed.heroCards)}</div>
+                            <div><strong>Cards</strong> {formatCards(detailed.heroCards)}{detailed.heroSeat !== null && judge?.evaluations?.[detailed.heroSeat] ? ` · ${judge.evaluations[detailed.heroSeat].label}` : ''}</div>
                             <div><strong>Flop</strong> {formatCards(board.flop)}</div>
                             <div><strong>Turn</strong> {formatCards(board.turn)}</div>
                             <div><strong>River</strong> {formatCards(board.river)}</div>
-                            {winners.length > 0 && (
-                                <div><strong>Winner</strong> {[...new Set(winners.map(winner => seatName(winner.seat)))].join(', ')}</div>
-                            )}
+                            {(detailed.reveals || []).map(reveal => (
+                                <div key={reveal.seat}>
+                                    <strong>{seatName(reveal.seat)}</strong> {formatCards(reveal.cards)}
+                                    {judge?.evaluations?.[reveal.seat] ? ` · ${judge.evaluations[reveal.seat].label}` : ''}
+                                </div>
+                            ))}
+                            {sidePots && sidePots.pots.map(pot => (
+                                <div key={`pot-${pot.index}`}>
+                                    <strong>{pot.type === 'main' ? 'Main pot' : `Side pot ${pot.index}`}</strong>
+                                    {' '}{Number(pot.amount).toLocaleString()} → 🏆 {potWinnerNames(pot)}
+                                </div>
+                            ))}
+                            {sidePots && sidePots.uncalledReturns.map(entry => (
+                                <div key={`return-${entry.seat}`}>
+                                    <strong>반환</strong> {seatName(entry.seat)} +{Number(entry.amount).toLocaleString()}
+                                </div>
+                            ))}
                         </div>
                     )}
                     {selectedHand.actions && selectedHand.actions.length > 0 ? (
@@ -293,8 +329,23 @@ const HistoryScreen = () => {
         );
     };
 
+    // 저장: 리듀서와 같은 헬퍼로 수정 결과를 계산해 선택 핸드 뷰도 즉시 갱신한다
+    const handleEditorSave = (payload) => {
+        if (!selectedSession || !editingHand) return false;
+        const ok = updateArchivedHand(selectedSession.id, editingHand.id, payload);
+        if (ok) setSelectedHand(applyArchivedHandPatch(editingHand, payload));
+        return ok;
+    };
+
     return (
         <div id="history-screen" className="screen active">
+            {editingHand && (
+                <DetailedHandEditor
+                    hand={editingHand}
+                    onSave={handleEditorSave}
+                    onClose={() => setEditingHand(null)}
+                />
+            )}
             <div className="screen-header">
                 <button className="back-btn" onClick={handleBack}>
                     ◀ Back
@@ -596,6 +647,18 @@ const HistoryScreen = () => {
                     font-size: 0.68rem;
                     font-weight: 900;
                     letter-spacing: 0.05em;
+                }
+                .hand-edit-button {
+                    display: inline-block;
+                    margin-left: 8px;
+                    padding: 6px 10px;
+                    border: 1px solid #7c3aed;
+                    border-radius: 9px;
+                    color: #ede9fe;
+                    background: #4c1d95;
+                    font-size: 0.72rem;
+                    font-weight: 900;
+                    cursor: pointer;
                 }
                 .action-log {
                     display: flex;

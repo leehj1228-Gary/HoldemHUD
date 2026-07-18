@@ -1010,14 +1010,25 @@ export function deriveSidePots(hand) {
                 excess.push({ seat: layerContributors[0].seat, amount });
             } else {
                 const eligibleSeats = layerContributors.filter(p => !p.folded).map(p => p.seat);
-                pots.push({
-                    index: pots.length,
-                    type: pots.length === 0 ? 'main' : 'side',
-                    cap: level,
-                    amount,
-                    contributorSeats: layerContributors.map(p => p.seat),
-                    eligibleSeats,
-                });
+                const lastPot = pots[pots.length - 1];
+                // 사이드팟은 "생존자의 올인 경계"에서만 갈라진다. 폴드한 좌석의 커밋
+                // 경계는 자격 집합을 바꾸지 못하므로, 자격이 같은 인접 레이어는 하나의
+                // 팟으로 병합한다 (PokerKit 차등 검증과 동일 규약 — HU인데 메인+사이드로
+                // 갈라져 보이던 표시 버그의 원인).
+                if (lastPot && lastPot.eligibleSeats.length === eligibleSeats.length
+                    && lastPot.eligibleSeats.every((seat, i) => seat === eligibleSeats[i])) {
+                    lastPot.cap = level;
+                    lastPot.amount += amount;
+                } else {
+                    pots.push({
+                        index: pots.length,
+                        type: pots.length === 0 ? 'main' : 'side',
+                        cap: level,
+                        amount,
+                        contributorSeats: layerContributors.map(p => p.seat),
+                        eligibleSeats,
+                    });
+                }
             }
         }
         previous = level;

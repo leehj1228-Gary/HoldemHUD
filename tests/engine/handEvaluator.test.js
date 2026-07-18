@@ -226,11 +226,9 @@ describe('determineShowdownWinners', () => {
         });
         const result = determineShowdownWinners(hand);
         expect(result.winners.every(winner => winner.seat !== 0)).toBe(true);
-        // seat0의 폴드 커밋(2) 경계로 팟이 두 레이어로 갈라진다 — 둘 다 seat1이 이긴다
-        expect(result.winners).toEqual([
-            { seat: 1, potIndex: 0 },
-            { seat: 1, potIndex: 1 },
-        ]);
+        // seat0의 폴드 커밋(2)은 자격 집합을 바꾸지 못하므로 팟은 하나로 병합된다
+        expect(result.winners).toEqual([{ seat: 1, potIndex: 0 }]);
+        expect(result.pots).toEqual([{ index: 0, type: 'main', amount: 18, winnerSeats: [1] }]);
         expect(result.evaluations[0]).toBeUndefined();
     });
 });

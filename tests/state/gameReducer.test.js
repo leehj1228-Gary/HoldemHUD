@@ -954,3 +954,82 @@ describe('detailed hand reducer flow', () => {
         expect(hasIncompleteDetailedHand(st.session)).toBe(false);
     });
 });
+
+// ---------------------------------------------------------------------------
+// UPDATE_ARCHIVED_HAND — 아카이브된 상세 핸드의 카드/승자 사후 수정
+// ---------------------------------------------------------------------------
+
+import { applyArchivedHandPatch } from '../../src/state/gameReducer.js';
+
+describe('UPDATE_ARCHIVED_HAND / applyArchivedHandPatch', () => {
+    function archivedDetailedState() {
+        let st = startSession();
+        st = reducer(st, {
+            type: 'ENABLE_DETAILED_TRACKING',
+            options: {
+                heroSeat: 3,
+                startingStacks: { 0: 100, 1: 100, 2: 100, 3: 100, 4: 100, 5: 100 },
+                chipUnit: 1,
+            },
+        });
+        st = reducer(st, {
+            type: 'RECORD_DETAILED_ACTION', seat: 3, actionType: 'raise', options: { amountTo: 6 },
+        });
+        st = reducer(st, { type: 'DETAILED_FOLD_OUT' });
+        st = reducer(st, { type: 'COMPLETE_DETAILED_HAND', payload: {} });
+        st = reducer(st, { type: 'END_SESSION' });
+        const session = st.archive[0];
+        const hand = (session.hands || []).find(h => h?.detailed?.enabled);
+        return { st, session, hand };
+    }
+
+    it('applies a card patch to an archived hand and keeps it completed', () => {
+        const { st, session, hand } = archivedDetailedState();
+        expect(hand).toBeTruthy();
+        expect(hand.detailed.completed).toBe(true);
+
+        const next = reducer(st, {
+            type: 'UPDATE_ARCHIVED_HAND',
+            sessionId: session.id,
+            handId: hand.id,
+            payload: {
+                cards: {
+                    heroSeat: 3,
+                    heroCards: ['As', 'Kd'],
+                    reveals: [],
+                    board: hand.detailed.board,
+                },
+            },
+        });
+        expect(next).not.toBe(st);
+        const updated = next.archive[0].hands.find(h => h.id === hand.id);
+        expect(updated.detailed.heroCards).toEqual(['As', 'Kd']);
+        expect(updated.detailed.completed).toBe(true);
+        expect(updated.detailed.winners).toEqual(hand.detailed.winners);
+        expect(updated.actions).toEqual(hand.actions); // 원장 불변
+    });
+
+    it('is a no-op for unknown ids and engine-rejected patches', () => {
+        const { st, session, hand } = archivedDetailedState();
+        expect(reducer(st, {
+            type: 'UPDATE_ARCHIVED_HAND', sessionId: 'nope', handId: hand.id, payload: {},
+        })).toBe(st);
+        // 중복 카드는 setDetailedCards가 거부 → 전체 no-op
+        expect(reducer(st, {
+            type: 'UPDATE_ARCHIVED_HAND',
+            sessionId: session.id,
+            handId: hand.id,
+            payload: { cards: { heroSeat: 3, heroCards: ['As', 'As'], reveals: [], board: hand.detailed.board } },
+        })).toBe(st);
+    });
+
+    it('rejects winners that are not eligible for the pot', () => {
+        const { hand } = archivedDetailedState();
+        // seat 0은 폴드했으므로 승자로 지정할 수 없다
+        expect(applyArchivedHandPatch(hand, { winners: [{ seat: 0, potIndex: null }] })).toBe(hand);
+        // 유일 생존자(seat 3)로의 재확정은 허용된다
+        const rewritten = applyArchivedHandPatch(hand, { winners: [{ seat: 3, potIndex: null }] });
+        expect(rewritten).not.toBe(hand);
+        expect(rewritten.detailed.completed).toBe(true);
+    });
+});

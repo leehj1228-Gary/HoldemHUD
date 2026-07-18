@@ -161,6 +161,36 @@ export function hasIncompleteDetailedHand(session) {
     return !!(cur?.detailed?.enabled && !cur.detailed.completed);
 }
 
+/**
+ * 아카이브된 상세 핸드의 카드/승자 사후 수정. 원장(액션 배열)은 절대 건드리지 않고,
+ * 카드는 setDetailedCards, 승자는 completeDetailedHand의 게이트를 다시 통과시킨다.
+ * 어느 단계든 엔진이 거부하면 원본 참조를 그대로 반환한다 (표준 불법 no-op).
+ * 리듀서(UPDATE_ARCHIVED_HAND)와 컨텍스트 선판정·화면 미리보기가 공유하는 단일 구현.
+ */
+export function applyArchivedHandPatch(hand, { cards, winners } = {}) {
+    if (!hand?.detailed?.enabled) return hand;
+    const wasCompleted = hand.detailed.completed === true;
+    let draft = wasCompleted ? undoDetailedStep(hand) : hand;
+    if (wasCompleted && draft === hand) return hand;
+    if (cards) {
+        const next = setDetailedCards(draft, cards);
+        if (next === draft) return hand;
+        draft = next;
+    }
+    // 완료됐던 핸드는 승자를 다시 확정해야 하고(기본: 기존 승자 유지), 초안 핸드는
+    // winners가 명시된 경우에만 완료를 시도한다 (편집기로 초안 마감 가능).
+    const nextWinners = winners ?? (wasCompleted ? hand.detailed.winners : null);
+    if (nextWinners && nextWinners.length > 0) {
+        const completed = completeDetailedHand(draft, { winners: nextWinners });
+        if (completed === draft) return hand;
+        draft = { ...completed, status: 'complete' };
+    } else if (wasCompleted) {
+        return hand;
+    }
+    if (draft.detailed.completed && !normalizeDetailedHandRecord(draft)) return hand;
+    return draft;
+}
+
 function normalizeLoadedHand(hand) {
     if (hand?.detailed?.enabled) return normalizeDetailedHandRecord(hand);
     return isValidHandRecord(hand) ? hand : null;
@@ -663,6 +693,29 @@ export function reducer(state, action) {
             const name = typeof action.name === 'string' ? action.name.trim() : '';
             if (!state.roster.includes(name)) return state;
             return { ...state, roster: state.roster.filter(n => n !== name) };
+        }
+
+        // 아카이브된 상세 핸드의 카드/승자 사후 수정 (히스토리 화면) — 원장은 불변
+        case 'UPDATE_ARCHIVED_HAND': {
+            const sessionIndex = (state.archive || []).findIndex(s => s.id === action.sessionId);
+            if (sessionIndex === -1) return state;
+            const session = state.archive[sessionIndex];
+            const handIndex = (session.hands || []).findIndex(h => h.id === action.handId);
+            if (handIndex === -1) return state;
+            const cur = session.hands[handIndex];
+            const next = applyArchivedHandPatch(cur, action.payload || {});
+            if (next === cur) return state;
+            const hands = [...session.hands];
+            hands[handIndex] = next;
+            const incompleteHands = hands
+                .filter(h => h?.detailed?.enabled && !h.detailed.completed).length;
+            const archive = [...state.archive];
+            archive[sessionIndex] = {
+                ...session,
+                hands,
+                ...(Number.isInteger(session.incompleteHands) ? { incompleteHands } : null),
+            };
+            return { ...state, archive };
         }
 
         case 'DELETE_ARCHIVED': {

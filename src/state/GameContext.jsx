@@ -8,6 +8,7 @@ import {
     isMidHand as isMidHandForSession,
     canDisableDetailedTracking,
     hasIncompleteDetailedHand,
+    applyArchivedHandPatch,
 } from './gameReducer.js';
 import { deriveHandState, legalActionsFor as engineLegalActionsFor } from '../engine/handEngine.js';
 import {
@@ -251,6 +252,14 @@ export function GameProvider({ children }) {
             const cur = stateRef.current.session?.currentHand;
             if (!cur?.detailed?.enabled || dealRunoutBoard(cur, board || {}) === cur) return false;
             dispatch({ type: 'DETAILED_RUNOUT', board });
+            return true;
+        },
+        // 히스토리에서 아카이브된 상세 핸드의 카드/승자 사후 수정 — 같은 헬퍼로 선판정
+        updateArchivedHand: (sessionId, handId, payload) => {
+            const session = (stateRef.current.archive || []).find(s => s.id === sessionId);
+            const cur = (session?.hands || []).find(h => h.id === handId);
+            if (!cur || applyArchivedHandPatch(cur, payload || {}) === cur) return false;
+            dispatch({ type: 'UPDATE_ARCHIVED_HAND', sessionId, handId, payload });
             return true;
         },
         undo: () => dispatch({ type: 'UNDO' }),

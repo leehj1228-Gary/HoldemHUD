@@ -479,6 +479,23 @@ describe('side pots and completion', () => {
         expect(side.uncalledReturns).toEqual([{ seat: 0, amount: 50 }]);
     });
 
+    it('merges dead-money layers into one pot when eligibility is unchanged', () => {
+        // BB가 블라인드만 내고 폴드 → 생존 2명이 같은 금액으로 올인. 폴드 커밋 경계는
+        // 자격 집합을 바꾸지 못하므로 팟은 하나여야 한다 (HU인데 메인+사이드로 갈라지던 버그).
+        let hand = tracked(3, [300, 300, 50]);
+        hand = applyDetailedAction(hand, 0, 'raise', { amountTo: 6 });
+        hand = applyDetailedAction(hand, 1, 'all-in');
+        hand = applyDetailedAction(hand, 2, 'fold');
+        hand = applyDetailedAction(hand, 0, 'call');
+
+        const side = deriveSidePots(hand);
+        expect(side.pots).toEqual([{
+            index: 0, type: 'main', cap: 300, amount: 602,
+            contributorSeats: [0, 1, 2], eligibleSeats: [0, 1],
+        }]);
+        expect(side.uncalledReturns).toEqual([]);
+    });
+
     it('records pot-specific winners only when every pot has an eligible winner', () => {
         const hand = threeWayAllIn();
         expect(completeDetailedHand(hand, { winners: [{ seat: 2, potIndex: 0 }] })).toBe(hand);

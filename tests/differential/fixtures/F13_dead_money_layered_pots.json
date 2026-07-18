@@ -35,8 +35,7 @@
   "result": {
     "winners": [
       { "seat": 2, "potIndex": 0 },
-      { "seat": 2, "potIndex": 1 },
-      { "seat": 1, "potIndex": 2 }
+      { "seat": 1, "potIndex": 1 }
     ]
   },
   "expectedDivergences": []
