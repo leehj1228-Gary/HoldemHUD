@@ -1,0 +1,43 @@
+{
+  "id": "F03_limped_minraise_ladder",
+  "title": "림프 팟·SB 컴플리트·프리/포스트플랍 최소 레이즈 산수",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 3,
+  "heroSeat": 2,
+  "seats": [
+    { "seat": 0, "stack": 100 },
+    { "seat": 1, "stack": 100 },
+    { "seat": 2, "stack": 100 },
+    { "seat": 3, "stack": 100 }
+  ],
+  "holeCards": {
+    "0": ["7h", "2s"],
+    "1": ["Kd", "Ks"],
+    "2": ["Ac", "Ah"],
+    "3": ["Qd", "Qs"]
+  },
+  "board": { "flop": ["3c", "8d", "Jh"], "turn": ["4s"], "river": ["9c"] },
+  "actions": [
+    { "street": "preflop", "seat": 2, "type": "call" },
+    { "street": "preflop", "seat": 3, "type": "call" },
+    { "street": "preflop", "seat": 0, "type": "call" },
+    { "street": "preflop", "seat": 1, "type": "raise", "amountTo": 4 },
+    { "street": "preflop", "seat": 2, "type": "call" },
+    { "street": "preflop", "seat": 3, "type": "raise", "amountTo": 6 },
+    { "street": "preflop", "seat": 0, "type": "fold" },
+    { "street": "preflop", "seat": 1, "type": "call" },
+    { "street": "preflop", "seat": 2, "type": "call" },
+    { "street": "flop", "seat": 1, "type": "check" },
+    { "street": "flop", "seat": 2, "type": "check" },
+    { "street": "flop", "seat": 3, "type": "check" },
+    { "street": "turn", "seat": 1, "type": "bet", "amountTo": 2 },
+    { "street": "turn", "seat": 2, "type": "raise", "amountTo": 4 },
+    { "street": "turn", "seat": 3, "type": "call" },
+    { "street": "turn", "seat": 1, "type": "call" },
+    { "street": "river", "seat": 1, "type": "check" },
+    { "street": "river", "seat": 2, "type": "check" },
+    { "street": "river", "seat": 3, "type": "check" }
+  ],
+  "result": { "winners": [{ "seat": 2, "potIndex": null }] },
+  "expectedDivergences": []
+}

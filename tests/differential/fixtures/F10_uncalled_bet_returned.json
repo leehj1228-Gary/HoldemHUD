@@ -1,0 +1,23 @@
+{
+  "id": "F10_uncalled_bet_returned",
+  "title": "레이즈에 폴드 — 언콜드 초과분 반환과 플랍 종료 팟",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 0,
+  "heroSeat": 0,
+  "seats": [
+    { "seat": 0, "stack": 200 },
+    { "seat": 1, "stack": 200 }
+  ],
+  "holeCards": { "0": ["As", "Kd"], "1": ["Qh", "Qc"] },
+  "board": { "flop": ["2c", "7d", "9h"] },
+  "actions": [
+    { "street": "preflop", "seat": 0, "type": "raise", "amountTo": 6 },
+    { "street": "preflop", "seat": 1, "type": "call" },
+    { "street": "flop", "seat": 1, "type": "check" },
+    { "street": "flop", "seat": 0, "type": "bet", "amountTo": 8 },
+    { "street": "flop", "seat": 1, "type": "raise", "amountTo": 24 },
+    { "street": "flop", "seat": 0, "type": "fold" }
+  ],
+  "result": {},
+  "expectedDivergences": []
+}

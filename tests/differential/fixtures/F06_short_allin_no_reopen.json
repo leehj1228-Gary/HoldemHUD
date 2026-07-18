@@ -1,0 +1,26 @@
+{
+  "id": "F06_short_allin_no_reopen",
+  "title": "단일 숏올인 리레이즈는 오프너에게 리오픈되지 않는다 (양 엔진 합의 구간)",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 2,
+  "heroSeat": 1,
+  "seats": [
+    { "seat": 0, "stack": 100 },
+    { "seat": 1, "stack": 9 },
+    { "seat": 2, "stack": 100 }
+  ],
+  "holeCards": {
+    "0": ["7h", "2c"],
+    "1": ["Qh", "Qc"],
+    "2": ["As", "Kd"]
+  },
+  "board": { "flop": ["3c", "8d", "Jh"], "turn": ["4s"], "river": ["9c"] },
+  "actions": [
+    { "street": "preflop", "seat": 2, "type": "raise", "amountTo": 6 },
+    { "street": "preflop", "seat": 0, "type": "fold" },
+    { "street": "preflop", "seat": 1, "type": "all-in" },
+    { "street": "preflop", "seat": 2, "type": "call" }
+  ],
+  "result": { "winners": [{ "seat": 1, "potIndex": null }] },
+  "expectedDivergences": []
+}

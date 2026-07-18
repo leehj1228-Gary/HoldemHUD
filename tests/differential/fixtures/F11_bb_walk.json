@@ -1,0 +1,24 @@
+{
+  "id": "F11_bb_walk",
+  "title": "BB 워크 — 전원 폴드, BB 블라인드 초과분 반환, 액션 없는 승자",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 2,
+  "heroSeat": 1,
+  "seats": [
+    { "seat": 0, "stack": 100 },
+    { "seat": 1, "stack": 100 },
+    { "seat": 2, "stack": 100 }
+  ],
+  "holeCards": {
+    "0": ["As", "Kd"],
+    "1": ["Qh", "Qc"],
+    "2": ["Jd", "Jc"]
+  },
+  "board": {},
+  "actions": [
+    { "street": "preflop", "seat": 2, "type": "fold" },
+    { "street": "preflop", "seat": 0, "type": "fold" }
+  ],
+  "result": {},
+  "expectedDivergences": []
+}

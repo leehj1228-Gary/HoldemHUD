@@ -1,0 +1,37 @@
+# 3종 게이트(lint·test·build) + PokerKit 차등 리플레이 골든 신선도 검증.
+# 골든 트레이스는 커밋 대상이므로, fixture/스크립트가 바뀌었는데 골든 재생성을
+# 빠뜨리면 pokerkit-parity 잡이 git diff로 잡아낸다 (docs/DIFFERENTIAL_REPLAY.md).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  node:
+    name: lint · test · build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx eslint src tests --max-warnings 0
+      - run: npx vitest run
+      - run: npm run build
+
+  pokerkit-parity:
+    name: PokerKit golden freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pokerkit==0.7.4
+      - run: python scripts/differential/pokerkit_replay.py
+      - name: committed goldens must be up to date
+        run: git diff --exit-code -- tests/differential/golden

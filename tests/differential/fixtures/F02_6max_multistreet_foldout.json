@@ -1,0 +1,42 @@
+{
+  "id": "F02_6max_multistreet_foldout",
+  "title": "6맥스 포지션 순서·멀티스트리트·리버 폴드아웃(언콜드 벳 반환)",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 5,
+  "heroSeat": 3,
+  "seats": [
+    { "seat": 0, "stack": 200 },
+    { "seat": 1, "stack": 200 },
+    { "seat": 2, "stack": 200 },
+    { "seat": 3, "stack": 200 },
+    { "seat": 4, "stack": 200 },
+    { "seat": 5, "stack": 200 }
+  ],
+  "holeCards": {
+    "0": ["2d", "3d"],
+    "1": ["Kc", "Kh"],
+    "2": ["7s", "2h"],
+    "3": ["Ac", "As"],
+    "4": ["5h", "5s"],
+    "5": ["Qd", "Qc"]
+  },
+  "board": { "flop": ["3c", "8d", "Jh"], "turn": ["4s"], "river": ["9c"] },
+  "actions": [
+    { "street": "preflop", "seat": 2, "type": "fold" },
+    { "street": "preflop", "seat": 3, "type": "raise", "amountTo": 5 },
+    { "street": "preflop", "seat": 4, "type": "fold" },
+    { "street": "preflop", "seat": 5, "type": "call" },
+    { "street": "preflop", "seat": 0, "type": "fold" },
+    { "street": "preflop", "seat": 1, "type": "call" },
+    { "street": "flop", "seat": 1, "type": "check" },
+    { "street": "flop", "seat": 3, "type": "bet", "amountTo": 9 },
+    { "street": "flop", "seat": 5, "type": "call" },
+    { "street": "flop", "seat": 1, "type": "fold" },
+    { "street": "turn", "seat": 3, "type": "check" },
+    { "street": "turn", "seat": 5, "type": "check" },
+    { "street": "river", "seat": 3, "type": "bet", "amountTo": 20 },
+    { "street": "river", "seat": 5, "type": "fold" }
+  ],
+  "result": {},
+  "expectedDivergences": []
+}

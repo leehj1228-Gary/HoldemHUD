@@ -1,0 +1,22 @@
+{
+  "id": "F04_hu_raise_war_allin",
+  "title": "HU 3벳/4벳/5벳 올인 체인 — lastFullRaiseSize 연쇄와 정확 콜",
+  "game": { "sb": 5, "bb": 10, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 0,
+  "heroSeat": 0,
+  "seats": [
+    { "seat": 0, "stack": 500 },
+    { "seat": 1, "stack": 450 }
+  ],
+  "holeCards": { "0": ["Ks", "Kd"], "1": ["Ah", "Ad"] },
+  "board": { "flop": ["2c", "7d", "9h"], "turn": ["Th"], "river": ["3s"] },
+  "actions": [
+    { "street": "preflop", "seat": 0, "type": "raise", "amountTo": 30 },
+    { "street": "preflop", "seat": 1, "type": "raise", "amountTo": 90 },
+    { "street": "preflop", "seat": 0, "type": "raise", "amountTo": 210 },
+    { "street": "preflop", "seat": 1, "type": "all-in" },
+    { "street": "preflop", "seat": 0, "type": "call" }
+  ],
+  "result": { "winners": [{ "seat": 1, "potIndex": null }] },
+  "expectedDivergences": []
+}

@@ -1,0 +1,48 @@
+{
+  "id": "F08_submin_allin_bet_checker_rights",
+  "title": "최소벳 미만 올인 벳을 마주한 체커의 레이즈 권리 — 우리 엔진(이미 액션함→불허, TDA 47-B 해석) vs PokerKit(허용) 문서화된 불일치",
+  "game": { "sb": 5, "bb": 10, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 2,
+  "heroSeat": 2,
+  "seats": [
+    { "seat": 0, "stack": 100 },
+    { "seat": 1, "stack": 100 },
+    { "seat": 2, "stack": 13 }
+  ],
+  "holeCards": {
+    "0": ["As", "Ks"],
+    "1": ["Qh", "Qc"],
+    "2": ["Jd", "Jc"]
+  },
+  "board": { "flop": ["3c", "8d", "Jh"], "turn": ["4s"], "river": ["9c"] },
+  "actions": [
+    { "street": "preflop", "seat": 2, "type": "call" },
+    { "street": "preflop", "seat": 0, "type": "call" },
+    { "street": "preflop", "seat": 1, "type": "check" },
+    { "street": "flop", "seat": 0, "type": "check" },
+    { "street": "flop", "seat": 1, "type": "check" },
+    { "street": "flop", "seat": 2, "type": "all-in" },
+    { "street": "flop", "seat": 0, "type": "call" },
+    { "street": "flop", "seat": 1, "type": "call" },
+    { "street": "turn", "seat": 0, "type": "check" },
+    { "street": "turn", "seat": 1, "type": "check" },
+    { "street": "river", "seat": 0, "type": "check" },
+    { "street": "river", "seat": 1, "type": "check" }
+  ],
+  "result": { "winners": [{ "seat": 2, "potIndex": null }] },
+  "expectedDivergences": [
+    {
+      "decision": 6,
+      "field": "canWager",
+      "js": false,
+      "pokerkit": true,
+      "rule": "checker-facing-submin-allin-bet",
+      "notes": "체크 후 최소벳 미만 올인 벳(3<10)을 마주한 좌석. 우리 엔진은 '이미 액션한 플레이어에게 풀벳 미만은 재개방 없음'(TDA 47-B의 엄격 해석), PokerKit은 올인+풀민벳(13)으로 레이즈 허용."
+    },
+    { "decision": 6, "field": "wagerMinTo", "js": null, "pokerkit": 13, "rule": "checker-facing-submin-allin-bet" },
+    { "decision": 6, "field": "wagerMaxTo", "js": null, "pokerkit": 90, "rule": "checker-facing-submin-allin-bet" },
+    { "decision": 7, "field": "canWager", "js": false, "pokerkit": true, "rule": "checker-facing-submin-allin-bet" },
+    { "decision": 7, "field": "wagerMinTo", "js": null, "pokerkit": 13, "rule": "checker-facing-submin-allin-bet" },
+    { "decision": 7, "field": "wagerMaxTo", "js": null, "pokerkit": 90, "rule": "checker-facing-submin-allin-bet" }
+  ]
+}

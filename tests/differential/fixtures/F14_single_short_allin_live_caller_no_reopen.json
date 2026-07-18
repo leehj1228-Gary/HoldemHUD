@@ -1,0 +1,39 @@
+{
+  "id": "F14_single_short_allin_live_caller_no_reopen",
+  "title": "단일 숏올인(증분 3<풀레이즈 4) + 라이브 플랫콜러 — 응수 상대가 남아 있어도 오프너/콜러 모두 리오픈되지 않는다 (리오픈 규칙 본체의 합의 fixture; F06은 응수 상대 부재 규칙과 겹쳐 있음)",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 4,
+  "heroSeat": 2,
+  "seats": [
+    { "seat": 0, "stack": 100 },
+    { "seat": 1, "stack": 100 },
+    { "seat": 2, "stack": 100 },
+    { "seat": 3, "stack": 100 },
+    { "seat": 4, "stack": 9 }
+  ],
+  "holeCards": {
+    "0": ["7h", "2c"],
+    "1": ["6s", "6h"],
+    "2": ["Ks", "Kd"],
+    "3": ["Qs", "Qd"],
+    "4": ["Ah", "Ad"]
+  },
+  "board": { "flop": ["3c", "8d", "Jh"], "turn": ["4s"], "river": ["9c"] },
+  "actions": [
+    { "street": "preflop", "seat": 2, "type": "raise", "amountTo": 6 },
+    { "street": "preflop", "seat": 3, "type": "call" },
+    { "street": "preflop", "seat": 4, "type": "all-in" },
+    { "street": "preflop", "seat": 0, "type": "fold" },
+    { "street": "preflop", "seat": 1, "type": "fold" },
+    { "street": "preflop", "seat": 2, "type": "call" },
+    { "street": "preflop", "seat": 3, "type": "call" },
+    { "street": "flop", "seat": 2, "type": "check" },
+    { "street": "flop", "seat": 3, "type": "check" },
+    { "street": "turn", "seat": 2, "type": "check" },
+    { "street": "turn", "seat": 3, "type": "check" },
+    { "street": "river", "seat": 2, "type": "check" },
+    { "street": "river", "seat": 3, "type": "check" }
+  ],
+  "result": { "winners": [{ "seat": 4, "potIndex": null }] },
+  "expectedDivergences": []
+}

@@ -1,0 +1,25 @@
+{
+  "id": "F01_hu_blinds_positions",
+  "title": "HU 블라인드 배치·프리/포스트플랍 액션 순서·기본 팟 산수",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 0,
+  "heroSeat": 0,
+  "seats": [
+    { "seat": 0, "stack": 200 },
+    { "seat": 1, "stack": 300 }
+  ],
+  "holeCards": { "0": ["As", "Kd"], "1": ["Qh", "Qc"] },
+  "board": { "flop": ["2c", "7d", "9h"], "turn": ["Th"], "river": ["2s"] },
+  "actions": [
+    { "street": "preflop", "seat": 0, "type": "raise", "amountTo": 6 },
+    { "street": "preflop", "seat": 1, "type": "call" },
+    { "street": "flop", "seat": 1, "type": "check" },
+    { "street": "flop", "seat": 0, "type": "check" },
+    { "street": "turn", "seat": 1, "type": "bet", "amountTo": 8 },
+    { "street": "turn", "seat": 0, "type": "call" },
+    { "street": "river", "seat": 1, "type": "check" },
+    { "street": "river", "seat": 0, "type": "check" }
+  ],
+  "result": { "winners": [{ "seat": 1, "potIndex": null }] },
+  "expectedDivergences": []
+}

@@ -1,0 +1,132 @@
+{
+  "decisions": [
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 10,
+      "pot": 15,
+      "seq": 0,
+      "stacks": {
+        "0": 495,
+        "1": 440
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 5,
+        "1": 10
+      },
+      "toCall": 5,
+      "wagerMaxTo": 500,
+      "wagerMinTo": 20
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 30,
+      "pot": 40,
+      "seq": 1,
+      "stacks": {
+        "0": 470,
+        "1": 440
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 30,
+        "1": 10
+      },
+      "toCall": 20,
+      "wagerMaxTo": 450,
+      "wagerMinTo": 50
+    },
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 90,
+      "pot": 120,
+      "seq": 2,
+      "stacks": {
+        "0": 470,
+        "1": 360
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 30,
+        "1": 90
+      },
+      "toCall": 60,
+      "wagerMaxTo": 500,
+      "wagerMinTo": 150
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 210,
+      "pot": 300,
+      "seq": 3,
+      "stacks": {
+        "0": 290,
+        "1": 360
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 210,
+        "1": 90
+      },
+      "toCall": 120,
+      "wagerMaxTo": 450,
+      "wagerMinTo": 330
+    },
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": false,
+      "currentBet": 450,
+      "pot": 660,
+      "seq": 4,
+      "stacks": {
+        "0": 290,
+        "1": 0
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 210,
+        "1": 450
+      },
+      "toCall": 240,
+      "wagerMaxTo": null,
+      "wagerMinTo": null
+    }
+  ],
+  "final": {
+    "finalStacks": {
+      "0": 50,
+      "1": 900
+    },
+    "netCommitted": {
+      "0": 450,
+      "1": 450
+    },
+    "pots": [
+      {
+        "amount": 900,
+        "eligibleSeats": [
+          0,
+          1
+        ]
+      }
+    ],
+    "street": "river",
+    "wentToShowdown": true
+  },
+  "fixtureId": "F04_hu_raise_war_allin",
+  "traceVersion": "pokerkit-diff.v1"
+}

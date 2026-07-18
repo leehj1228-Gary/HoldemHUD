@@ -287,6 +287,22 @@ describe('raise reopening and all-ins', () => {
         expect(legalDetailedActions(hand, 3)).toEqual(['fold', 'call']);
     });
 
+    it('does not advertise raise to a stack that cannot exceed the current bet', () => {
+        // HU: 딜러(0)가 150 오버벳 올인, 상대(1)는 스택(잔여 82)이 콜 금액(132)조차 못 덮는다.
+        // raise 권리는 살아 있어도 가능한 최대 투입이 현재 벳 이하라 모든 raise가 no-op이므로
+        // 어휘에서도 빠져야 한다 (PokerKit 차등 리플레이 F12에서 발견된 광고/적용 불일치).
+        let hand = tracked(2, [150, 100]);
+        hand = applyDetailedAction(hand, 0, 'raise', { amountTo: 6 });
+        hand = applyDetailedAction(hand, 1, 'raise', { amountTo: 18 });
+        hand = applyDetailedAction(hand, 0, 'all-in');
+
+        const state = deriveDetailedState(hand);
+        expect(state.toActSeat).toBe(1);
+        expect(state.raiseRights[1]).toBe(true);
+        expect(legalDetailedActions(hand, 1)).toEqual(['fold', 'call', 'all-in']);
+        expect(applyDetailedAction(hand, 1, 'raise', { amountTo: 100 })).toBe(hand);
+    });
+
     it('classifies the all-in command as bet/call/raise plus isAllIn', () => {
         let hand = tracked(3, [20, 10, 5]);
         hand = applyDetailedAction(hand, 0, 'all-in');

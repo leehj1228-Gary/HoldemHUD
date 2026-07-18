@@ -1,0 +1,195 @@
+{
+  "decisions": [
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 2,
+      "pot": 3,
+      "seq": 0,
+      "stacks": {
+        "0": 199,
+        "1": 298
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 1,
+        "1": 2
+      },
+      "toCall": 1,
+      "wagerMaxTo": 200,
+      "wagerMinTo": 4
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 6,
+      "pot": 8,
+      "seq": 1,
+      "stacks": {
+        "0": 194,
+        "1": 298
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 6,
+        "1": 2
+      },
+      "toCall": 4,
+      "wagerMaxTo": 300,
+      "wagerMinTo": 10
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": false,
+      "canWager": true,
+      "currentBet": 0,
+      "pot": 12,
+      "seq": 2,
+      "stacks": {
+        "0": 194,
+        "1": 294
+      },
+      "street": "flop",
+      "streetCommitted": {
+        "0": 0,
+        "1": 0
+      },
+      "toCall": 0,
+      "wagerMaxTo": 294,
+      "wagerMinTo": 2
+    },
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": false,
+      "canWager": true,
+      "currentBet": 0,
+      "pot": 12,
+      "seq": 3,
+      "stacks": {
+        "0": 194,
+        "1": 294
+      },
+      "street": "flop",
+      "streetCommitted": {
+        "0": 0,
+        "1": 0
+      },
+      "toCall": 0,
+      "wagerMaxTo": 194,
+      "wagerMinTo": 2
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": false,
+      "canWager": true,
+      "currentBet": 0,
+      "pot": 12,
+      "seq": 4,
+      "stacks": {
+        "0": 194,
+        "1": 294
+      },
+      "street": "turn",
+      "streetCommitted": {
+        "0": 0,
+        "1": 0
+      },
+      "toCall": 0,
+      "wagerMaxTo": 294,
+      "wagerMinTo": 2
+    },
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 8,
+      "pot": 20,
+      "seq": 5,
+      "stacks": {
+        "0": 194,
+        "1": 286
+      },
+      "street": "turn",
+      "streetCommitted": {
+        "0": 0,
+        "1": 8
+      },
+      "toCall": 8,
+      "wagerMaxTo": 194,
+      "wagerMinTo": 16
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": false,
+      "canWager": true,
+      "currentBet": 0,
+      "pot": 28,
+      "seq": 6,
+      "stacks": {
+        "0": 186,
+        "1": 286
+      },
+      "street": "river",
+      "streetCommitted": {
+        "0": 0,
+        "1": 0
+      },
+      "toCall": 0,
+      "wagerMaxTo": 286,
+      "wagerMinTo": 2
+    },
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": false,
+      "canWager": true,
+      "currentBet": 0,
+      "pot": 28,
+      "seq": 7,
+      "stacks": {
+        "0": 186,
+        "1": 286
+      },
+      "street": "river",
+      "streetCommitted": {
+        "0": 0,
+        "1": 0
+      },
+      "toCall": 0,
+      "wagerMaxTo": 186,
+      "wagerMinTo": 2
+    }
+  ],
+  "final": {
+    "finalStacks": {
+      "0": 186,
+      "1": 314
+    },
+    "netCommitted": {
+      "0": 14,
+      "1": 14
+    },
+    "pots": [
+      {
+        "amount": 28,
+        "eligibleSeats": [
+          0,
+          1
+        ]
+      }
+    ],
+    "street": "river",
+    "wentToShowdown": true
+  },
+  "fixtureId": "F01_hu_blinds_positions",
+  "traceVersion": "pokerkit-diff.v1"
+}

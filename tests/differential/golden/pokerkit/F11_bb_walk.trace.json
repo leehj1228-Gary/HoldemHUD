@@ -1,0 +1,63 @@
+{
+  "decisions": [
+    {
+      "actorSeat": 2,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 2,
+      "pot": 3,
+      "seq": 0,
+      "stacks": {
+        "0": 99,
+        "1": 98,
+        "2": 100
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 1,
+        "1": 2,
+        "2": 0
+      },
+      "toCall": 2,
+      "wagerMaxTo": 100,
+      "wagerMinTo": 4
+    },
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 2,
+      "pot": 3,
+      "seq": 1,
+      "stacks": {
+        "0": 99,
+        "1": 98,
+        "2": 100
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 1,
+        "1": 2,
+        "2": 0
+      },
+      "toCall": 1,
+      "wagerMaxTo": 100,
+      "wagerMinTo": 4
+    }
+  ],
+  "final": {
+    "finalStacks": {
+      "0": 99,
+      "1": 101,
+      "2": 100
+    },
+    "netCommitted": null,
+    "pots": null,
+    "street": "preflop",
+    "wentToShowdown": false
+  },
+  "fixtureId": "F11_bb_walk",
+  "traceVersion": "pokerkit-diff.v1"
+}

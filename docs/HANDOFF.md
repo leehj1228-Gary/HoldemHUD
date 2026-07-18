@@ -1,7 +1,7 @@
 # HoldemHUD 핸드오프 문서
 
-> 작성일: 2026-07-16 · 기준 커밋: `51e76c6` · 테스트 381/381 · 빌드/린트 클린
-> 다음 작업자는 이 문서 → [REBUILD_DESIGN.md](REBUILD_DESIGN.md) → [ANALYSIS_DESIGN.md](ANALYSIS_DESIGN.md) 순으로 읽으면 된다.
+> 갱신일: 2026-07-18 · 테스트 397/397 · 빌드/린트 클린
+> 다음 작업자는 이 문서 → [REBUILD_DESIGN.md](REBUILD_DESIGN.md) → [ANALYSIS_DESIGN.md](ANALYSIS_DESIGN.md) → [DIFFERENTIAL_REPLAY.md](DIFFERENTIAL_REPLAY.md) 순으로 읽으면 된다.
 
 ## 1. 프로젝트 한 줄 요약
 
@@ -17,6 +17,7 @@
 | `bc5381d` | 설계 리뷰 확정 이슈 7건 수정 (입력 유실 피드백, 완료핸드 보호, quarantine 로더, minRaiseTo 규칙, 문법 단일화, 화면 가드 일원화, 4MB 텔레메트리+내보내기) |
 | `f5af515` | low 이슈 15건 수정 (아카이브 null 방어, seq 수리, 리뷰 익명화 게이트, 두 엔진 프리플랍 규칙 일치, 라이브 통계 currentHand 반영 등) |
 | `51e76c6` | **분석 계약 Phase 1** — DecisionSnapshot/AnalysisResult 계약, 게이트웨이, 캐시, computeStatsAsOf, 세션리크 가명화 |
+| Phase 3 (2026-07-18) | **PokerKit 차등 리플레이** — golden fixture 14종을 우리 엔진과 pokerkit 0.7.4로 재생해 결정 단위 팟/스택/합법액션/사이드팟 parity를 CI 강제. TDA 누적 재개방이 PokerKit과 완전 일치함을 교차 확증, 문서화된 해석 차이 2건(F08 체커 vs 서브민 올인벳, F09 스트래들 최소 리레이즈), 광고/적용 불일치 엔진 버그 1건 수정(콜 올인 전용 스택에 raise 광고). WSL 불필요 — 네이티브 Windows Python으로 동작 |
 
 ## 3. 아키텍처 지도
 
@@ -64,7 +65,7 @@ tests/             # vitest 381개 (engine/state/storage/services/analysis/compo
 
 ## 6. 다음 단계 (우선순위 제안)
 
-1. **Phase 3 — PokerKit 차등 리플레이** (권장 다음 작업): WSL2 Ubuntu + Python 3.9 사용 가능 확인됨. golden fixture(§22.2의 13종)로 우리 엔진과 PokerKit이 같은 원장을 재생해 팟/스택/합법액션/사이드팟 일치를 CI에서 검증. 불일치 → 분석 차단.
+1. ~~**Phase 3 — PokerKit 차등 리플레이**~~ ✅ 완료 (2026-07-18, [DIFFERENTIAL_REPLAY.md](DIFFERENTIAL_REPLAY.md)). 남은 조각: 런타임 핸드별 sidecar 검증(`REPLAY_DISAGREEMENT` 연결)은 후속 — CI 게이트는 가동 중.
 2. **Phase 5 — HU river 토이 solver**: fold/call → 단일 벳 사이즈 순. 첫 `solver_calibrated` 어댑터. 계약·모드 테이블은 이미 준비됨(capabilities에 등록만).
 3. **Phase 2 잔여 — stable player ID**: 현재 식별자는 trim된 이름. 개명/동명이인 대응.
 4. **Phase 6 — 상대 모델**: Beta-Binomial shrinkage + exploit cap (연구 §18 공식 그대로).
@@ -83,9 +84,10 @@ tests/             # vitest 381개 (engine/state/storage/services/analysis/compo
 
 ```bash
 npm run dev          # http://localhost:5173
-npm test             # vitest 381개 — 모든 변경 후 필수
+npm test             # vitest 397개 — 모든 변경 후 필수 (PokerKit 골든 대조 포함, Python 불필요)
 npm run build        # vite 프로덕션 빌드
 npx eslint src tests --max-warnings 0
+npm run diff:pokerkit # 차등 리플레이 골든 재생성+대조 (pip install pokerkit==0.7.4)
 npm run electron:dev # Windows (ELECTRON_START_URL 자동)
 npx cap sync android # Android
 ```

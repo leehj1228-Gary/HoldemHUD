@@ -1,0 +1,21 @@
+{
+  "id": "F12_hu_preflop_shove_runout",
+  "title": "HU 프리플랍 오버슛 올인 — 부분 콜(콜 올인), 언콜드 반환, 전 보드 런아웃",
+  "game": { "sb": 1, "bb": 2, "chipUnit": 1, "straddleCount": 0 },
+  "dealerSeat": 0,
+  "heroSeat": 1,
+  "seats": [
+    { "seat": 0, "stack": 150 },
+    { "seat": 1, "stack": 100 }
+  ],
+  "holeCards": { "0": ["Kd", "Kh"], "1": ["Ah", "Ac"] },
+  "board": { "flop": ["2c", "7d", "9h"], "turn": ["Th"], "river": ["3s"] },
+  "actions": [
+    { "street": "preflop", "seat": 0, "type": "raise", "amountTo": 6 },
+    { "street": "preflop", "seat": 1, "type": "raise", "amountTo": 18 },
+    { "street": "preflop", "seat": 0, "type": "all-in" },
+    { "street": "preflop", "seat": 1, "type": "call" }
+  ],
+  "result": { "winners": [{ "seat": 1, "potIndex": null }] },
+  "expectedDivergences": []
+}

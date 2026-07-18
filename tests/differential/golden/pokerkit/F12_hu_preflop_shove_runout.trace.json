@@ -1,0 +1,111 @@
+{
+  "decisions": [
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 2,
+      "pot": 3,
+      "seq": 0,
+      "stacks": {
+        "0": 149,
+        "1": 98
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 1,
+        "1": 2
+      },
+      "toCall": 1,
+      "wagerMaxTo": 150,
+      "wagerMinTo": 4
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 6,
+      "pot": 8,
+      "seq": 1,
+      "stacks": {
+        "0": 144,
+        "1": 98
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 6,
+        "1": 2
+      },
+      "toCall": 4,
+      "wagerMaxTo": 100,
+      "wagerMinTo": 10
+    },
+    {
+      "actorSeat": 0,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": true,
+      "currentBet": 18,
+      "pot": 24,
+      "seq": 2,
+      "stacks": {
+        "0": 144,
+        "1": 82
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 6,
+        "1": 18
+      },
+      "toCall": 12,
+      "wagerMaxTo": 150,
+      "wagerMinTo": 30
+    },
+    {
+      "actorSeat": 1,
+      "canCheckOrCall": true,
+      "canFold": true,
+      "canWager": false,
+      "currentBet": 150,
+      "pot": 168,
+      "seq": 3,
+      "stacks": {
+        "0": 0,
+        "1": 82
+      },
+      "street": "preflop",
+      "streetCommitted": {
+        "0": 150,
+        "1": 18
+      },
+      "toCall": 82,
+      "wagerMaxTo": null,
+      "wagerMinTo": null
+    }
+  ],
+  "final": {
+    "finalStacks": {
+      "0": 50,
+      "1": 200
+    },
+    "netCommitted": {
+      "0": 100,
+      "1": 100
+    },
+    "pots": [
+      {
+        "amount": 200,
+        "eligibleSeats": [
+          0,
+          1
+        ]
+      }
+    ],
+    "street": "river",
+    "wentToShowdown": true
+  },
+  "fixtureId": "F12_hu_preflop_shove_runout",
+  "traceVersion": "pokerkit-diff.v1"
+}

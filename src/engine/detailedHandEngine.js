@@ -654,7 +654,14 @@ export function legalDetailedActions(hand, seat) {
         else if (hasResponsiveOpponent && state.raiseRights[seat] !== false) actions.push('raise');
     } else {
         actions.push('fold', 'call');
-        if (hasResponsiveOpponent && state.raiseRights[seat] !== false) actions.push('raise');
+        // 스택이 현재 벳을 넘어설 수 없는 좌석(가능한 최대가 콜 이하 = 콜 올인 전용)에는
+        // raise를 광고하지 않는다 — applyDetailedAction이 전부 거부하는 죽은 어휘이기
+        // 때문(PokerKit 차등 리플레이 F12에서 발견된 광고/적용 불일치). 미지 수치는
+        // 기록기 관용 원칙대로 허용 측에 남긴다.
+        const canExceedBet = !finiteAmount(player.stack) || !finiteAmount(player.streetCommitted)
+            || !finiteAmount(state.currentBet)
+            || player.streetCommitted + player.stack > state.currentBet;
+        if (hasResponsiveOpponent && state.raiseRights[seat] !== false && canExceedBet) actions.push('raise');
     }
     if (!finiteAmount(player.stack) || player.stack > 0) {
         const allInWouldRaise = state.currentBet !== 0
