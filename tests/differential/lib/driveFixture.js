@@ -13,6 +13,7 @@ import {
     legalDetailedActions,
 } from '../../../src/engine/detailedHandEngine.js';
 import { normalizeDetailedHandRecord, DETAILED_STREETS } from '../../../src/engine/schema.js';
+import { determineShowdownWinners } from '../../../src/engine/handEvaluator.js';
 
 export const TRACE_VERSION = 'pokerkit-diff.v1';
 
@@ -117,8 +118,7 @@ export function mergePotLayers(pots) {
     return merged;
 }
 
-function payoutBySeat(fixture, hand, state, side) {
-    const winners = state.winners;
+function payoutBySeat(fixture, state, side, winners) {
     const result = {};
     for (const p of state.players.filter(x => x.active)) result[p.seat] = 0;
     for (const entry of side.uncalledReturns) result[entry.seat] += entry.amount;
@@ -218,7 +218,7 @@ export function driveFixture(fixture) {
     if (side.pots.some(pot => !finite(pot.amount)) || side.total === null) {
         fail(fixture, 'final', 'side pots not exactly derivable');
     }
-    const payouts = payoutBySeat(fixture, hand, state, side);
+    const payouts = payoutBySeat(fixture, state, side, state.winners);
     const uncalledBySeat = {};
     for (const entry of side.uncalledReturns) {
         uncalledBySeat[entry.seat] = (uncalledBySeat[entry.seat] ?? 0) + entry.amount;
@@ -243,6 +243,20 @@ export function driveFixture(fixture) {
 
     const live = state.players.filter(p => p.active && !p.folded);
     const wentToShowdown = live.length >= 2;
+    // 평가기 교차 검증: fixture가 선언한 승자와 handEvaluator의 자동 판정이 같은 지급을
+    // 만들어야 한다. 이 지급은 아래에서 PokerKit의 자체 쇼다운 평가(finalStacks 골든)와
+    // 다시 대조되므로, 세 소스(작성자·우리 평가기·PokerKit)가 전부 맞물린다.
+    if (wentToShowdown) {
+        const auto = determineShowdownWinners(hand);
+        if (!auto) fail(fixture, 'final', 'determineShowdownWinners returned null (showdown fixtures must carry full cards)');
+        const autoPayouts = payoutBySeat(fixture, state, side, auto.winners);
+        for (const seat of Object.keys(payouts)) {
+            if (autoPayouts[seat] !== payouts[seat]) {
+                fail(fixture, 'final',
+                    `evaluator disagrees with declared winners at seat ${seat}: declared payout ${payouts[seat]}, evaluator payout ${autoPayouts[seat]}`);
+            }
+        }
+    }
     const trace = {
         traceVersion: TRACE_VERSION,
         fixtureId: fixture.id,

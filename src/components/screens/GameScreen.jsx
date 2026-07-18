@@ -15,6 +15,7 @@ const GameScreen = () => {
         blinds, currency, currentHand, sessionHands,
         derived, isDetailed, enableDetailedTracking, disableDetailedTracking,
         recordDetailedAction, advanceDetailedStreet, setDetailedCards, completeDetailedHand,
+        foldOutDetailed, checkDownDetailed, runoutDetailed,
         isMidHand, canDisableDetailed, chipUnit, detailedIncomplete,
     } = useGame();
 
@@ -204,6 +205,9 @@ const GameScreen = () => {
                     onAdvanceStreet={advanceDetailedStreet}
                     onSetCards={handleDetailedCards}
                     onComplete={completeDetailedHand}
+                    onFoldOut={foldOutDetailed}
+                    onCheckDown={checkDownDetailed}
+                    onRunout={runoutDetailed}
                     onDisableDetail={disableDetailedTracking}
                 />
             ) : (

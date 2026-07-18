@@ -793,6 +793,64 @@ export function applyDetailedAction(hand, seat, type, options = {}) {
     return appendAction(hand, state, seat, resolvedType, amountTo, amountAdded, precision, isAllIn);
 }
 
+// ---------------------------------------------------------------------------
+// 배치 스텝 (빠른 기록용) — 개별 액션과 동일한 합법성 게이트를 통과하는 순수 루프.
+// 하나라도 불법이면 전체를 no-op(동일 참조 반환)으로 거부한다: 반쯤 적용된 배치는
+// 어떤 단일 액션보다 위험하다.
+// ---------------------------------------------------------------------------
+
+/** 현재 스트리트의 남은 액션 대기 좌석을 전부 폴드시킨다 (전원 fold 합법일 때만). */
+export function foldOutPendingSeats(hand) {
+    let current = hand;
+    for (let guard = 0; guard < MAX_DETAILED_ACTIONS; guard += 1) {
+        const state = deriveDetailedState(current);
+        if (!state.enabled || state.isComplete) return hand;
+        if (state.toActSeat === null) break;
+        if (!legalDetailedActions(current, state.toActSeat).includes('fold')) return hand;
+        const next = applyDetailedAction(current, state.toActSeat, 'fold');
+        if (next === current) return hand;
+        current = next;
+    }
+    return current;
+}
+
+/** 현재 스트리트의 남은 액션 대기 좌석을 전부 체크시킨다 (전원 check 합법일 때만). */
+export function checkDownStreet(hand) {
+    let current = hand;
+    for (let guard = 0; guard < MAX_DETAILED_ACTIONS; guard += 1) {
+        const state = deriveDetailedState(current);
+        if (!state.enabled || state.isComplete) return hand;
+        if (state.toActSeat === null) break;
+        if (!legalDetailedActions(current, state.toActSeat).includes('check')) return hand;
+        const next = applyDetailedAction(current, state.toActSeat, 'check');
+        if (next === current) return hand;
+        current = next;
+    }
+    return current;
+}
+
+/**
+ * 올인 런아웃: 더 이상 베팅이 없을 때(올인 대치 또는 응수 가능 1명 이하) 남은
+ * 보드를 리버까지 한 번에 깐다. boardPatch = { flop?, turn?, river? } — 빠진
+ * 스트리트는 모름([])으로 진행. 베팅 주체가 남아 있으면 전체 no-op.
+ */
+export function dealRunoutBoard(hand, boardPatch = {}) {
+    let current = hand;
+    for (let guard = 0; guard < STREETS.length; guard += 1) {
+        const state = deriveDetailedState(current);
+        if (!state.enabled || state.isComplete || state.handOver || !state.streetClosed) break;
+        const next = nextStreet(state.street);
+        if (!next) break;
+        const actionable = state.players.filter(p => p.active && !p.folded && !p.allIn);
+        if (!state.allRemainingAllIn && actionable.length > 1) return hand;
+        const cards = boardPatch[next];
+        const advanced = advanceDetailedStreet(current, Array.isArray(cards) ? cards : []);
+        if (advanced === current) return hand;
+        current = advanced;
+    }
+    return current;
+}
+
 /** Move to the next street after betting closes; zero cards means an unknown board street. */
 export function advanceDetailedStreet(hand, cards = []) {
     const state = deriveDetailedState(hand);

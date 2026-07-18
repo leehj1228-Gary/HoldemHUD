@@ -235,6 +235,9 @@ const DetailedTracker = ({
     onAdvanceStreet = () => {},
     onSetCards = () => {},
     onComplete = () => {},
+    onFoldOut = () => {},
+    onCheckDown = () => {},
+    onRunout = () => {},
     onDisableDetail = () => {},
 }) => {
     const [cardPicker, setCardPicker] = useState(null);
@@ -243,6 +246,7 @@ const DetailedTracker = ({
         revision: null,
         winnerSeats: [],
         potWinnerSeats: {},
+        manual: false,
     });
     const eligibilityRevision = JSON.stringify((derived?.players || []).map(player => [
         player?.seat, player?.active, player?.sittingOut, player?.folded,
@@ -271,6 +275,9 @@ const DetailedTracker = ({
     const potWinnerSeats = winnerSelection.revision === selectionRevision
         ? winnerSelection.potWinnerSeats
         : {};
+    const manualWinnerMode = winnerSelection.revision === selectionRevision
+        ? winnerSelection.manual
+        : false;
 
     if (!hand) {
         return (
@@ -326,6 +333,10 @@ const DetailedTracker = ({
                 ? ['fold', 'call', 'raise', 'all-in']
                 : ['check', 'bet', 'all-in']);
     const orderedLegalActions = ACTION_ORDER.filter(type => legalActions.includes(type));
+    // 배치 스텝 버튼 노출 조건 — 실제 합법성은 엔진(foldOutPendingSeats 등)이 전체 no-op으로 재검증
+    const pendingCount = Array.isArray(derived.pendingResponseSeats) ? derived.pendingResponseSeats.length : 0;
+    const canFoldOutRest = pendingCount >= 2 && orderedLegalActions.includes('fold');
+    const canCheckDownRest = pendingCount >= 2 && orderedLegalActions.includes('check');
     const eligibleWinners = players.filter(player => player.active !== false && !player.sittingOut && !player.folded);
     const eligibleWinnerSeats = new Set(eligibleWinners.map(player => player.seat));
     const winnerSelectionRequired = completionReady && !recordLocked && eligibleWinners.length > 1;
@@ -336,13 +347,29 @@ const DetailedTracker = ({
         pot.index,
         (potWinnerSeats[pot.index] || []).filter(seat => pot.eligibleSeats.includes(seat)),
     ]));
-    const winnerSelectionComplete = !winnerSelectionRequired || (hasPotSpecificWinners
+    // 보드+생존자 카드가 전부 알려지면 엔진이 승자를 판정한다 — 수동 선택은 폴백/오버라이드
+    const autoShowdown = derived.autoShowdown || null;
+    const useAutoWinners = winnerSelectionRequired && !!autoShowdown && !manualWinnerMode;
+    const manualSelectionComplete = hasPotSpecificWinners
         ? sidePots.every(pot => validPotWinnerSeats[pot.index]?.length > 0)
-        : validWinnerSeats.length > 0);
-    const completionWinners = hasPotSpecificWinners
-        ? sidePots.flatMap(pot => (validPotWinnerSeats[pot.index] || [])
-            .map(seat => ({ seat, potIndex: pot.index })))
-        : validWinnerSeats.map(seat => ({ seat, potIndex: null }));
+        : validWinnerSeats.length > 0;
+    const winnerSelectionComplete = !winnerSelectionRequired || useAutoWinners || manualSelectionComplete;
+    const completionWinners = useAutoWinners
+        ? autoShowdown.winners
+        : hasPotSpecificWinners
+            ? sidePots.flatMap(pot => (validPotWinnerSeats[pot.index] || [])
+                .map(seat => ({ seat, potIndex: pot.index })))
+            : validWinnerSeats.map(seat => ({ seat, potIndex: null }));
+    const seatLabel = (seat) => {
+        const player = players.find(candidate => String(candidate.seat) === String(seat));
+        return player?.name || `Seat ${Number(seat) + 1}`;
+    };
+    const setManualWinnerMode = (manual) => setWinnerSelection(current => {
+        const base = current.revision === selectionRevision
+            ? current
+            : { revision: selectionRevision, winnerSeats: [], potWinnerSeats: {}, manual: false };
+        return { ...base, revision: selectionRevision, manual };
+    });
 
     const knownCardsExcept = ({ target, targetStreet, targetSeat }) => {
         const cards = [];
@@ -410,9 +437,41 @@ const DetailedTracker = ({
         });
     };
 
+    // 런아웃 모드: 생존자 2+인데 응수 가능(칩 보유) 좌석이 1 이하 — 더 이상 베팅이 없으므로
+    // 남은 보드를 스트리트별로 나눠 밟는 대신 한 번에 입력받아 리버까지 진행한다.
+    const liveInHand = players.filter(player => player.active !== false && !player.sittingOut && !player.folded);
+    const actionableCount = liveInHand.filter(player => !player.allIn).length;
+    const runoutMode = streetComplete && !handComplete && !!nextStreet
+        && liveInHand.length > 1 && actionableCount <= 1;
+    const runoutStreets = STREETS.slice(streetIndex + 1);
+    const runoutCount = runoutStreets.reduce((total, item) => total + STREET_META[item].cardCount, 0);
+
+    const openRunoutPicker = () => {
+        setCardPicker({
+            target: 'runout',
+            title: `런아웃 보드 (${runoutCount}장)`,
+            count: runoutCount,
+            value: [],
+            usedCards: [...boardCards, ...heroCards, ...players.flatMap(player => cardsForPlayer(hand, player))],
+            qualityOptions: ['exact', 'unknown'],
+        });
+    };
+
     const handleCardConfirm = (result) => {
         if (!cardPicker) return;
         const cards = result.quality === 'unknown' ? [] : result.cards;
+        if (cardPicker.target === 'runout') {
+            const board = {};
+            let cursor = 0;
+            for (const runoutStreet of runoutStreets) {
+                const take = STREET_META[runoutStreet].cardCount;
+                board[runoutStreet] = cards.slice(cursor, cursor + take);
+                cursor += take;
+            }
+            if (onRunout(board) === false) notifyRejectedAction();
+            setCardPicker(null);
+            return;
+        }
         if (cardPicker.target === 'advanceStreet') {
             onAdvanceStreet(cards);
         } else {
@@ -612,18 +671,41 @@ const DetailedTracker = ({
 
             {streetComplete && nextStreet && !handComplete && (
                 <section style={styles.advancePanel}>
-                    <div>
-                        <strong>{STREET_META[street].label} 액션 완료</strong>
-                        <div style={styles.panelHint}>{STREET_META[nextStreet].label} 카드를 받고 다음 street로 진행합니다.</div>
-                    </div>
-                    <div style={styles.advanceActions}>
-                        <button type="button" onClick={openAdvancePicker} style={styles.primaryButton}>
-                            {STREET_META[nextStreet].label} 카드 입력
-                        </button>
-                        <button type="button" onClick={() => onAdvanceStreet([])} style={styles.secondaryButton}>
-                            카드 모름으로 진행
-                        </button>
-                    </div>
+                    {runoutMode ? (
+                        <>
+                            <div>
+                                <strong>베팅 종료 — 런아웃</strong>
+                                <div style={styles.panelHint}>남은 보드 {runoutCount}장을 한 번에 입력하면 리버까지 자동 진행합니다.</div>
+                            </div>
+                            <div style={styles.advanceActions}>
+                                <button type="button" onClick={openRunoutPicker} style={styles.primaryButton}>
+                                    런아웃 입력 ({runoutCount}장)
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => { if (onRunout({}) === false) notifyRejectedAction(); }}
+                                    style={styles.secondaryButton}
+                                >
+                                    모름으로 진행
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div>
+                                <strong>{STREET_META[street].label} 액션 완료</strong>
+                                <div style={styles.panelHint}>{STREET_META[nextStreet].label} 카드를 받고 다음 street로 진행합니다.</div>
+                            </div>
+                            <div style={styles.advanceActions}>
+                                <button type="button" onClick={openAdvancePicker} style={styles.primaryButton}>
+                                    {STREET_META[nextStreet].label} 카드 입력
+                                </button>
+                                <button type="button" onClick={() => onAdvanceStreet([])} style={styles.secondaryButton}>
+                                    카드 모름으로 진행
+                                </button>
+                            </div>
+                        </>
+                    )}
                 </section>
             )}
 
@@ -638,6 +720,9 @@ const DetailedTracker = ({
                             <span>Board {boardCards.length}/5</span>
                             <span>Hero {heroCards.length}/2</span>
                             <span>실제 팟 {formatAmount(pot)} · {qualityText(potQuality)}</span>
+                            {heroSeat !== null && heroSeat !== undefined && autoShowdown?.evaluations?.[heroSeat] && (
+                                <span style={styles.handLabel}>Hero · {autoShowdown.evaluations[heroSeat].label}</span>
+                            )}
                         </div>
                         {uncalledReturns.map(item => {
                             const player = players.find(candidate => candidate.seat === item.seat);
@@ -655,7 +740,12 @@ const DetailedTracker = ({
                             const cards = cardsForPlayer(hand, player);
                             return (
                                 <div key={player.seat} style={styles.showdownRow}>
-                                    <span style={styles.showdownName}>{player.name || `Seat ${Number(player.seat) + 1}`}</span>
+                                    <span style={styles.showdownName}>
+                                        {player.name || `Seat ${Number(player.seat) + 1}`}
+                                        {autoShowdown?.evaluations?.[player.seat] && (
+                                            <em style={styles.handLabel}> · {autoShowdown.evaluations[player.seat].label}</em>
+                                        )}
+                                    </span>
                                     <CardSlots cards={cards} count={2} />
                                     <button
                                         type="button"
@@ -672,8 +762,40 @@ const DetailedTracker = ({
 
                     {winnerSelectionRequired && (
                         <div style={styles.winnerPanel}>
-                            <div style={styles.fieldLabelText}>Winner (동률이면 여러 명 선택)</div>
-                            {hasPotSpecificWinners ? sidePots.map(pot => (
+                            {useAutoWinners ? (
+                                <>
+                                    <div style={styles.winnerPanelHeader}>
+                                        <div style={styles.fieldLabelText}>승자 자동 판정</div>
+                                        <button type="button" onClick={() => setManualWinnerMode(true)} style={styles.ghostButton}>
+                                            직접 수정
+                                        </button>
+                                    </div>
+                                    {autoShowdown.pots.map(pot => (
+                                        <div key={pot.index} style={styles.autoWinnerRow}>
+                                            <span style={styles.potWinnerTitle}>
+                                                {pot.type === 'main' ? 'Main pot' : `Side pot ${pot.index}`} · {formatAmount(pot.amount)}
+                                            </span>
+                                            <span style={styles.autoWinnerNames}>
+                                                🏆 {pot.winnerSeats.map(seatLabel).join(', ')}
+                                                {pot.winnerSeats.length > 1 ? ' · 스플릿' : ''}
+                                                {autoShowdown.evaluations[pot.winnerSeats[0]]
+                                                    ? ` — ${autoShowdown.evaluations[pot.winnerSeats[0]].label}`
+                                                    : ''}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </>
+                            ) : (
+                                <>
+                                    <div style={styles.winnerPanelHeader}>
+                                        <div style={styles.fieldLabelText}>Winner (동률이면 여러 명 선택)</div>
+                                        {autoShowdown && (
+                                            <button type="button" onClick={() => setManualWinnerMode(false)} style={styles.ghostButton}>
+                                                자동 판정 사용
+                                            </button>
+                                        )}
+                                    </div>
+                                    {hasPotSpecificWinners ? sidePots.map(pot => (
                                 <div key={pot.index} style={styles.potWinnerGroup}>
                                     <div style={styles.potWinnerTitle}>
                                         {pot.type === 'main' ? 'Main pot' : `Side pot ${pot.index}`} · {formatAmount(pot.amount)}
@@ -689,7 +811,7 @@ const DetailedTracker = ({
                                                     onClick={() => setWinnerSelection(current => {
                                                         const base = current.revision === selectionRevision
                                                             ? current
-                                                            : { revision: selectionRevision, winnerSeats: [], potWinnerSeats: {} };
+                                                            : { revision: selectionRevision, winnerSeats: [], potWinnerSeats: {}, manual: true };
                                                         const selectedSeats = base.potWinnerSeats[pot.index] || [];
                                                         return {
                                                             ...base,
@@ -724,7 +846,7 @@ const DetailedTracker = ({
                                                 onClick={() => setWinnerSelection(current => {
                                                     const base = current.revision === selectionRevision
                                                         ? current
-                                                        : { revision: selectionRevision, winnerSeats: [], potWinnerSeats: {} };
+                                                        : { revision: selectionRevision, winnerSeats: [], potWinnerSeats: {}, manual: true };
                                                     return {
                                                         ...base,
                                                         winnerSeats: base.winnerSeats.includes(player.seat)
@@ -742,6 +864,8 @@ const DetailedTracker = ({
                                         );
                                     })}
                                 </div>
+                            )}
+                                </>
                             )}
                         </div>
                     )}
@@ -787,6 +911,32 @@ const DetailedTracker = ({
                             {numberOrNull(derived.currentBet) !== null ? ` · Bet ${formatAmount(derived.currentBet)}` : ''}
                         </div>
                     </div>
+
+                    {(canFoldOutRest || canCheckDownRest) && (
+                        <div style={styles.quickRow}>
+                            {canFoldOutRest && (
+                                <button
+                                    type="button"
+                                    style={styles.quickButton}
+                                    onClick={() => {
+                                        if (!window.confirm(`남은 ${pendingCount}명을 모두 폴드 처리할까요?`)) return;
+                                        if (onFoldOut() === false) notifyRejectedAction();
+                                    }}
+                                >
+                                    ⏩ 나머지 폴드 ({pendingCount})
+                                </button>
+                            )}
+                            {canCheckDownRest && (
+                                <button
+                                    type="button"
+                                    style={styles.quickButton}
+                                    onClick={() => { if (onCheckDown() === false) notifyRejectedAction(); }}
+                                >
+                                    ⏩ 체크 다운 ({pendingCount})
+                                </button>
+                            )}
+                        </div>
+                    )}
 
                     {orderedLegalActions.length > 0 ? (
                         <div style={{
@@ -967,6 +1117,22 @@ const styles = {
     },
     showdownName: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#e2e8f0', fontSize: '0.78rem', fontWeight: 800 },
     winnerPanel: { display: 'grid', gap: '8px', padding: '10px', borderRadius: '12px', background: '#0f172a' },
+    winnerPanelHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
+    ghostButton: {
+        minHeight: '36px', padding: '6px 10px', border: '1px solid #475569', borderRadius: '9px',
+        background: 'transparent', color: '#94a3b8', fontSize: '0.72rem', fontWeight: 800, cursor: 'pointer',
+    },
+    autoWinnerRow: {
+        display: 'grid', gap: '3px', padding: '9px 10px', border: '1px solid #14532d',
+        borderRadius: '10px', background: 'rgba(20, 83, 45, 0.25)',
+    },
+    autoWinnerNames: { color: '#bbf7d0', fontSize: '0.84rem', fontWeight: 800 },
+    handLabel: { color: '#a5b4fc', fontSize: '0.68rem', fontStyle: 'normal', fontWeight: 800 },
+    quickRow: { display: 'grid', gridAutoFlow: 'column', gap: '7px', marginBottom: '8px' },
+    quickButton: {
+        minHeight: '42px', padding: '7px 10px', border: '1px dashed #64748b', borderRadius: '10px',
+        background: 'rgba(30, 41, 59, 0.8)', color: '#cbd5e1', fontSize: '0.78rem', fontWeight: 800, cursor: 'pointer',
+    },
     potWinnerGroup: { display: 'grid', gap: '6px', padding: '8px', border: '1px solid #334155', borderRadius: '10px' },
     potWinnerTitle: { color: '#fbbf24', fontSize: '0.7rem', fontWeight: 900 },
     winnerGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '7px' },

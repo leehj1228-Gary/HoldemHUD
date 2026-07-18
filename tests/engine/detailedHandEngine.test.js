@@ -12,6 +12,9 @@ import {
     completeDetailedHand,
     undoDetailedStep,
     deriveSidePots,
+    foldOutPendingSeats,
+    checkDownStreet,
+    dealRunoutBoard,
 } from '../../src/engine/detailedHandEngine.js';
 
 function makeHand(playerCount = 3, { dealerSeat = 0, blinds = { sb: 1, bb: 2 }, straddleCount = 0 } = {}) {
@@ -316,6 +319,69 @@ describe('raise reopening and all-ins', () => {
         const state = deriveDetailedState(hand);
         expect(state.streetClosed).toBe(true);
         expect(state.allRemainingAllIn).toBe(true);
+    });
+});
+
+describe('batch steps (fold-out / check-down / runout)', () => {
+    it('folds out every pending seat after a raise and ends the hand', () => {
+        let hand = tracked(4, [100, 100, 100, 100]);
+        hand = applyDetailedAction(hand, 3, 'raise', { amountTo: 10 });
+
+        const folded = foldOutPendingSeats(hand);
+        expect(folded).not.toBe(hand);
+        expect(folded.actions.slice(-3).map(a => [a.seat, a.type])).toEqual([
+            [0, 'fold'], [1, 'fold'], [2, 'fold'],
+        ]);
+        const state = deriveDetailedState(folded);
+        expect(state.handOver).toBe(true);
+        expect(state.players.filter(p => !p.folded).map(p => p.seat)).toEqual([3]);
+    });
+
+    it('rejects fold-out entirely when any pending seat cannot fold', () => {
+        // 노벳 스트리트 — fold가 불법이므로 배치 전체가 no-op
+        let hand = tracked(3, [100, 100, 100]);
+        hand = closeThreeHandedLimpPot(hand);
+        hand = advanceDetailedStreet(hand, ['2c', '7d', '9h']);
+        expect(foldOutPendingSeats(hand)).toBe(hand);
+    });
+
+    it('checks down an unbet street and closes it', () => {
+        let hand = tracked(3, [100, 100, 100]);
+        hand = closeThreeHandedLimpPot(hand);
+        hand = advanceDetailedStreet(hand, ['2c', '7d', '9h']);
+
+        const checked = checkDownStreet(hand);
+        expect(checked).not.toBe(hand);
+        expect(checked.actions.slice(-3).every(a => a.type === 'check' && a.street === 'flop')).toBe(true);
+        expect(deriveDetailedState(checked).streetClosed).toBe(true);
+        // 벳을 마주한 스트리트에서는 전체 no-op
+        const bet = applyDetailedAction(advanceDetailedStreet(checked, ['Th']), 1, 'bet', { amountTo: 4 });
+        expect(checkDownStreet(bet)).toBe(bet);
+    });
+
+    it('deals the whole runout at once when no more betting is possible', () => {
+        let hand = tracked(2, [50, 50]);
+        hand = applyDetailedAction(hand, 0, 'all-in');
+        hand = applyDetailedAction(hand, 1, 'call');
+
+        const ran = dealRunoutBoard(hand, { flop: ['2c', '7d', '9h'], turn: ['Th'], river: ['3s'] });
+        expect(ran).not.toBe(hand);
+        const state = deriveDetailedState(ran);
+        expect(state.street).toBe('river');
+        expect(state.handOver).toBe(true);
+        expect(state.board).toEqual({ flop: ['2c', '7d', '9h'], turn: ['Th'], river: ['3s'] });
+    });
+
+    it('rejects the runout batch when betting is still live or cards collide', () => {
+        let live = tracked(3, [100, 100, 100]);
+        live = closeThreeHandedLimpPot(live);
+        expect(dealRunoutBoard(live, { flop: ['2c', '7d', '9h'] })).toBe(live); // 응수 가능 3명
+
+        let allIn = tracked(2, [50, 50]);
+        allIn = applyDetailedAction(allIn, 0, 'all-in');
+        allIn = applyDetailedAction(allIn, 1, 'call');
+        // 중복 카드가 낀 패치는 어떤 스트리트도 적용되지 않아야 한다 (all-or-nothing)
+        expect(dealRunoutBoard(allIn, { flop: ['2c', '7d', '9h'], turn: ['2c'], river: ['3s'] })).toBe(allIn);
     });
 });
 

@@ -25,6 +25,9 @@ import {
     setDetailedCards,
     completeDetailedHand,
     undoDetailedStep,
+    foldOutPendingSeats,
+    checkDownStreet,
+    dealRunoutBoard,
 } from '../engine/detailedHandEngine.js';
 
 export const DEFAULT_BLINDS = { sb: 1, bb: 2 };
@@ -420,6 +423,43 @@ export function reducer(state, action) {
             if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
             const cur = state.session.currentHand;
             const next = advanceDetailedStreet(cur, action.cards || []);
+            if (next === cur) return state;
+            return {
+                ...state,
+                session: { ...state.session, currentHand: next },
+                autoNext: { pending: false },
+            };
+        }
+
+        // 배치 스텝 3종 — 엔진이 전체를 no-op으로 거부하면 state도 그대로 반환된다
+        case 'DETAILED_FOLD_OUT': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const next = foldOutPendingSeats(cur);
+            if (next === cur) return state;
+            return {
+                ...state,
+                session: { ...state.session, currentHand: next },
+                autoNext: { pending: false },
+            };
+        }
+
+        case 'DETAILED_CHECK_DOWN': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const next = checkDownStreet(cur);
+            if (next === cur) return state;
+            return {
+                ...state,
+                session: { ...state.session, currentHand: next },
+                autoNext: { pending: false },
+            };
+        }
+
+        case 'DETAILED_RUNOUT': {
+            if (!state.session || !state.session.currentHand?.detailed?.enabled) return state;
+            const cur = state.session.currentHand;
+            const next = dealRunoutBoard(cur, action.board || {});
             if (next === cur) return state;
             return {
                 ...state,

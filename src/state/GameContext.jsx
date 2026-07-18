@@ -16,7 +16,11 @@ import {
     deriveSidePots,
     applyDetailedAction,
     chipUnitForBlinds,
+    foldOutPendingSeats,
+    checkDownStreet,
+    dealRunoutBoard,
 } from '../engine/detailedHandEngine.js';
+import { determineShowdownWinners } from '../engine/handEvaluator.js';
 import { computeAllStats } from '../engine/statsEngine.js';
 import {
     loadPersisted,
@@ -171,6 +175,8 @@ export function GameProvider({ children }) {
             handComplete: detail.isComplete || detail.handOver,
             sidePotState,
             legalActions: detail.toActSeat === null ? [] : legalDetailedActions(currentHand, detail.toActSeat),
+            // 보드 5장+생존자 홀카드가 다 알려지면 팟별 승자 자동 판정, 아니면 null(수동 폴백)
+            autoShowdown: determineShowdownWinners(currentHand),
         };
     }, [currentHand]);
     // 포지션은 진행 중 핸드의 동결 스냅샷에서 파생 — 라이브 좌석 재계산과의 괴리 방지.
@@ -228,6 +234,25 @@ export function GameProvider({ children }) {
         advanceDetailedStreet: (cards) => dispatch({ type: 'ADVANCE_DETAILED_STREET', cards }),
         setDetailedCards: (payload) => dispatch({ type: 'SET_DETAILED_CARDS', payload }),
         completeDetailedHand: (payload) => dispatch({ type: 'COMPLETE_DETAILED_HAND', payload }),
+        // 배치 스텝 3종 — recordDetailedAction과 같은 방식으로 no-op을 선판정해 boolean 반환
+        foldOutDetailed: () => {
+            const cur = stateRef.current.session?.currentHand;
+            if (!cur?.detailed?.enabled || foldOutPendingSeats(cur) === cur) return false;
+            dispatch({ type: 'DETAILED_FOLD_OUT' });
+            return true;
+        },
+        checkDownDetailed: () => {
+            const cur = stateRef.current.session?.currentHand;
+            if (!cur?.detailed?.enabled || checkDownStreet(cur) === cur) return false;
+            dispatch({ type: 'DETAILED_CHECK_DOWN' });
+            return true;
+        },
+        runoutDetailed: (board) => {
+            const cur = stateRef.current.session?.currentHand;
+            if (!cur?.detailed?.enabled || dealRunoutBoard(cur, board || {}) === cur) return false;
+            dispatch({ type: 'DETAILED_RUNOUT', board });
+            return true;
+        },
         undo: () => dispatch({ type: 'UNDO' }),
         nextHand: () => dispatch({ type: 'NEXT_HAND' }),
         cancelAutoNext: () => dispatch({ type: 'CANCEL_AUTO_NEXT' }),

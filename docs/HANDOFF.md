@@ -1,6 +1,6 @@
 # HoldemHUD 핸드오프 문서
 
-> 갱신일: 2026-07-18 · 테스트 397/397 · 빌드/린트 클린
+> 갱신일: 2026-07-18 · 테스트 417/417 · 빌드/린트 클린
 > 다음 작업자는 이 문서 → [REBUILD_DESIGN.md](REBUILD_DESIGN.md) → [ANALYSIS_DESIGN.md](ANALYSIS_DESIGN.md) → [DIFFERENTIAL_REPLAY.md](DIFFERENTIAL_REPLAY.md) 순으로 읽으면 된다.
 
 ## 1. 프로젝트 한 줄 요약
@@ -18,6 +18,7 @@
 | `f5af515` | low 이슈 15건 수정 (아카이브 null 방어, seq 수리, 리뷰 익명화 게이트, 두 엔진 프리플랍 규칙 일치, 라이브 통계 currentHand 반영 등) |
 | `51e76c6` | **분석 계약 Phase 1** — DecisionSnapshot/AnalysisResult 계약, 게이트웨이, 캐시, computeStatsAsOf, 세션리크 가명화 |
 | Phase 3 (2026-07-18) | **PokerKit 차등 리플레이** — golden fixture 14종을 우리 엔진과 pokerkit 0.7.4로 재생해 결정 단위 팟/스택/합법액션/사이드팟 parity를 CI 강제. TDA 누적 재개방이 PokerKit과 완전 일치함을 교차 확증, 문서화된 해석 차이 2건(F08 체커 vs 서브민 올인벳, F09 스트래들 최소 리레이즈), 광고/적용 불일치 엔진 버그 1건 수정(콜 올인 전용 스택에 raise 광고). WSL 불필요 — 네이티브 Windows Python으로 동작 |
+| 상세 기록 간소화 (2026-07-18) | **쇼다운 자동 승자 판정 + 배치 스텝** — engine/handEvaluator.js(7장 NLHE 평가기, 순수)로 보드 5장+생존자 카드가 알려지면 팟별 승자를 자동 판정(수동 선택은 폴백/오버라이드, 동률=스플릿). 차등 하네스가 평가기를 PokerKit 자체 쇼다운 평가와 교차 검증. 배치 스텝 3종(나머지 폴드/체크 다운/런아웃 일괄 — all-or-nothing 순수 루프 + 리듀서 액션)으로 기록 탭 수 대폭 축소. 브라우저 E2E로 전 플로우 검증 |
 
 ## 3. 아키텍처 지도
 
